@@ -38,5 +38,12 @@
 - [x] 修复设置页启动闪退：不再读取 Android 15 受限的
       `Settings.Secure.ENABLED_INPUT_METHODS`，改用
       `InputMethodManager.getEnabledInputMethodList()`；MuMu 冷启动验证通过
+- [x] 按 WeaveText 首页重做设置页：Material 3 品牌卡、三态状态、试验输入框、
+      分组列表、关于/插件/存储对话框
+- [x] 启用 AndroidX + Material Components，补明暗主题与 640dp 内容列
+- [x] 使用 `E:/work/pime` 的蓝色 PIME 标志生成自适应应用图标
+- [x] MuMu 实测明暗模式、插件/存储/关于对话框、默认输入法状态切换、
+      试验输入框拉起键盘并输入
+- [ ] 设置页增加插件启停/多链管理（当前只读展示）
 - [ ] arm64 物理设备验证
 - [ ] release 签名与图标

@@ -3,4 +3,36 @@
     <string name="app_name">PIME 输入法</string>
     <string name="ime_name">PIME 输入法（pime-core）</string>
     <string name="subtype_label">中文 / 英文</string>
+
+    <string name="home_title">PIME</string>
+    <string name="about_button">关于</string>
+    <string name="hero_title">PIME 输入法</string>
+    <string name="hero_tagline">让输入顺手一点</string>
+    <string name="hero_test_hint">在这里试试输入…</string>
+    <string name="action_enable">启用输入法</string>
+    <string name="action_switch">选择输入法</string>
+
+    <string name="status_ready">已就绪 · 当前默认输入法</string>
+    <string name="status_enabled">已启用 · 尚未切换为默认输入法</string>
+    <string name="status_disabled">完成设置，开始使用 PIME</string>
+
+    <string name="group_keyboard">键盘</string>
+    <string name="row_ime">输入法设置</string>
+    <string name="row_ime_desc">启用、切换与系统输入设置</string>
+    <string name="row_plugins">插件与链</string>
+    <string name="row_storage">存储位置</string>
+
+    <string name="group_about">关于</string>
+    <string name="row_version">版本</string>
+    <string name="row_core">输入内核</string>
+    <string name="row_core_desc">pime-core · 原生 C ABI + WASM 插件</string>
+
+    <string name="footer">按键先交给 pime-core，未被处理时直接交给编辑器。\n分词、词典、候选等业务全部由插件提供。</string>
+
+    <string name="dialog_close">关闭</string>
+    <string name="dialog_plugins_title">已加载的插件</string>
+    <string name="dialog_storage_title">存储位置</string>
+    <string name="dialog_about_title">关于 PIME</string>
+    <string name="dialog_about_text">PIME 输入法 %1$s\n\n基于 pime-core 的 Android 宿主外壳。\n外壳只负责宿主：按键、编辑器交互、视图与权限。\n分词、词典、语言模型、候选与状态机全部由插件提供。</string>
+    <string name="no_plugins">尚未安装插件包</string>
 </resources>

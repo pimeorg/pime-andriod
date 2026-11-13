@@ -19,13 +19,18 @@ NDK 28.2.13676358、CMake 3.31.6）；Gradle 8.14.5（缓存分发 + wrapper）�
 `t:/Program Files/Netease/MuMu`，VM 0 为 Android 15（API 35、x86_64，adb
 `127.0.0.1:16384`）。实测发现并修复了两个只在 Android 上出现的问题（见下）。
 
+最新要求：设置页做成类似 `T:/temp/WeaveText` 的首页（Material 3、品牌卡、
+分组列表），图标等参考 `E:/work/pime`。本轮据此重做了启动页，并补上应用图标。
+
 ## 已完成
 
 | 内容 | 位置 |
 |---|---|
 | Gradle 工程与 wrapper | `settings.gradle`、`build.gradle`、`app/build.gradle`、`gradlew*` |
 | IME 注册（service、intent-filter、method.xml） | `AndroidManifest.xml`、`res/xml/method.xml` |
-| 启动器设置页（启用/切换、插件目录） | `SettingsActivity.java` |
+| 启动器设置页（Material 3 首页、品牌卡、分组列表） | `SettingsActivity.java`、`res/layout/activity_settings.xml` |
+| 应用图标（自适应 + 旧系统回退） | `res/mipmap-anydpi*`、`res/drawable-nodpi/app_icon_blue*` |
+| 明暗主题与配色 | `res/values{-night}/{colors,themes,bools}.xml` |
 | core 生命周期、会话、上下文、焦点、安全、复位 | `PimeImeService.java`、`PimeCore.java` |
 | 插件加载、代 build/activate、链 CBOR 读取 | `PimeCore.java`、`PimeImeService.java` |
 | HAL sink → Java（组合、提交、候选、隐藏、提示音、通知） | `pime_jni.cpp` |
@@ -65,6 +70,24 @@ focus=false + reset。sink 回调在 owner 线程同步到达，直接更新 UI�
 
 因此即使没有任何插件，键盘也可正常输入 ASCII；安装带插件的链后，按键先经过
 core，组合串和候选由插件产生。
+
+### 设置页
+
+参考 WeaveText 的首页结构，但不引入 Compose：使用 AppCompat + Material
+Components 的原生 View，保持 `SettingsActivity` 单文件、无状态层。页面由顶部
+工具栏、primaryContainer 品牌卡、两个分组卡片和页脚组成：
+
+- 品牌卡：PIME 标志、名称、三态状态文案（未启用 / 已启用未切换 / 已就绪）、
+  当前状态下需要的唯一动作按钮，以及一个可直接唤起键盘的试验输入框。
+- “键盘”组：输入法设置、插件与链（列出 `files/plugins` 下完整包）、存储位置。
+- “关于”组：版本、内核说明；右上角“关于”重复打开同一说明。
+- 状态判断不再读 `Settings.Secure.ENABLED_INPUT_METHODS`，启用状态用
+  `InputMethodManager.getEnabledInputMethodList()`，默认状态在 API 34+ 用
+  `getCurrentInputMethodInfo()`、旧系统回退到 `DEFAULT_INPUT_METHOD`。
+- 宽屏下内容列最宽 640dp 并居中；系统栏 inset 用 `ViewCompat` 处理，避免
+  targetSdk 36 的 edge-to-edge 把标题压到状态栏下。
+- 明暗两套 Material 3 配色（取自 WeaveText 的蓝色方案）；启动图标使用
+  `E:/work/pime` 的蓝色 PIME 标志，裁切出透明前景并生成自适应图标。
 
 ### 缓冲与文本
 
@@ -173,6 +196,13 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   `Status: ok`、`LaunchState: COLD`，`topResumedActivity` 为设置页；
   logcat 无 `AndroidRuntime` 异常，界面显示“状态：已启用”，插件目录与链
   路径正常。
+- **Material 3 设置页实测（2026-11-13）**：MuMu 12 横屏下冷启动正常，品牌卡、
+  分组卡片和图标显示完整；切换 `cmd uimode night yes/no` 后明暗两套配色均
+  正常。点击“插件与链”列出 5 个完整插件包与 `default.cbor` 链路径；点击
+  “存储位置”显示绝对路径；“关于”对话框显示版本与宿主/插件边界。将 PIME
+  设为默认输入法后 `onResume` 立即变为“已就绪 · 当前默认输入法”并隐藏动作
+  按钮；点击试验输入框能拉起 PIME 软键盘，输入 `nhso` 时组合串与候选栏
+  正常出现。桌面启动器显示新的蓝色 PIME 图标。
 
 ## 对 core 的修改
 
@@ -187,8 +217,10 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
 - Lua（`PIME_BUILD_LUA`）未启用：Lua 插件包仍不能在 APK 内执行；WASM 已经可用。
 - 未在物理设备上运行：实测环境为 MuMu 12 的 Android 15 x86_64 模拟器，覆盖
   JNI、WAMR 执行与 InputConnection 路径，但未覆盖 arm64 真机与厂商 ROM 差异。
-- 只有 debug 签名；未配置 release 签名、混淆、图标。
-- 链选择固定 `default.cbor`；未做多链/插件管理 UI。
+- 只有 debug 签名；未配置 release 签名与混淆。
+- 链选择固定 `default.cbor`；设置页只展示插件包和路径，未做多链/插件启停 UI。
+- 设置页的插件列表按“目录内直接存在 `manifest.yaml` + `plugin.wasm`”筛选；
+  旧版本留下的 `files/plugins/<id>/<version>/` 目录不会显示，也不会被清理。
 - 插件包只在首次启动时从 `assets/` 复制到 `files/plugins/`；`adb install -r`
   保留应用数据，因此重装 APK 不会更新插件。实测新插件需先
   `adb shell pm clear dev.pime.ime`（会清空设置），或提升插件版本号让目录名
