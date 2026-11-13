@@ -22,4 +22,5 @@
     <color name="outline_variant">#2A2C31</color>
 
     <color name="success">#4CC38A</color>
+    <color name="warning">#F0B457</color>
 </resources>

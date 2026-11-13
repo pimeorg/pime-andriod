@@ -9,12 +9,19 @@
     <string name="hero_title">PIME 输入法</string>
     <string name="hero_tagline">让输入顺手一点</string>
     <string name="hero_test_hint">在这里试试输入…</string>
-    <string name="action_enable">启用输入法</string>
-    <string name="action_switch">选择输入法</string>
 
-    <string name="status_ready">已就绪 · 当前默认输入法</string>
-    <string name="status_enabled">已启用 · 尚未切换为默认输入法</string>
-    <string name="status_disabled">完成设置，开始使用 PIME</string>
+    <string name="status_pill_ready">● 已就绪</string>
+    <string name="status_pill_enabled">● 已启用，未切换</string>
+    <string name="status_pill_disabled">● 未启用</string>
+
+    <string name="step1_title">启用 PIME 输入法</string>
+    <string name="step1_desc">在系统设置中打开「PIME 输入法」的开关。</string>
+    <string name="step1_note">系统会提示输入法可能收集输入内容。PIME 的分词、词典与候选全部在本机插件里完成，不联网。</string>
+    <string name="step1_action">去启用</string>
+    <string name="step2_title">切换为默认输入法</string>
+    <string name="step2_desc">选择「PIME 输入法（pime-core）」。</string>
+    <string name="step2_action">选择输入法</string>
+    <string name="step_done">✓</string>
 
     <string name="group_keyboard">键盘</string>
     <string name="row_ime">输入法设置</string>
@@ -23,16 +30,39 @@
     <string name="row_storage">存储位置</string>
 
     <string name="group_about">关于</string>
-    <string name="row_version">版本</string>
+    <string name="row_about">关于 PIME</string>
     <string name="row_core">输入内核</string>
     <string name="row_core_desc">pime-core · 原生 C ABI + WASM 插件</string>
 
     <string name="footer">按键先交给 pime-core，未被处理时直接交给编辑器。\n分词、词典、候选等业务全部由插件提供。</string>
 
-    <string name="dialog_close">关闭</string>
-    <string name="dialog_plugins_title">已加载的插件</string>
-    <string name="dialog_storage_title">存储位置</string>
-    <string name="dialog_about_title">关于 PIME</string>
-    <string name="dialog_about_text">PIME 输入法 %1$s\n\n基于 pime-core 的 Android 宿主外壳。\n外壳只负责宿主：按键、编辑器交互、视图与权限。\n分词、词典、语言模型、候选与状态机全部由插件提供。</string>
+    <string name="page_about">关于</string>
+    <string name="page_plugins">插件与链</string>
+    <string name="page_storage">存储位置</string>
+
+    <string name="section_version">版本</string>
+    <string name="section_packages">插件包</string>
+    <string name="section_chain">默认链</string>
+    <string name="section_dirs">目录</string>
+    <string name="section_notes">说明</string>
+
+    <string name="row_version">版本</string>
+    <string name="row_plugins_count">插件包</string>
+    <string name="row_handwriting">数据来源</string>
+    <string name="row_license">许可证</string>
+    <string name="plugins_count_value">%1$d 个</string>
+    <string name="plugins_chain_desc">拼音默认链 · keymap → parse → translate → rank → format</string>
+    <string name="plugins_note">插件包只在首次启动时从 APK 复制到应用目录。重装 APK 不会覆盖已有插件；更新插件需清除应用数据（adb shell pm clear dev.pime.ime）或提升插件版本号。</string>
+    <string name="storage_plugins_desc">完整插件包所在目录</string>
+    <string name="storage_chains_desc">链配置所在目录</string>
+    <string name="storage_note">应用数据位于内部存储，卸载应用即删除。debug 包与 release 包共用同一份数据目录。</string>
     <string name="no_plugins">尚未安装插件包</string>
+
+    <string name="about_intro">基于 pime-core 的 Android 宿主外壳。外壳只负责宿主：按键、编辑器交互、视图与权限；分词、词典、语言模型、候选与状态机全部由插件提供。</string>
+    <string name="about_data">拼音词表基于 rime-wanxiang 生成，数据以 CC BY 4.0 授权，署名见仓库 data/pinyin/SOURCES.md。</string>
+    <string name="about_license">仓库许可证待定。</string>
+
+    <string name="copy_path">复制路径</string>
+    <string name="copied">已复制：%1$s</string>
+    <string name="role_unknown">未知角色</string>
 </resources>
