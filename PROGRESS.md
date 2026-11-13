@@ -97,6 +97,49 @@ Components 的原生 View，保持 `SettingsActivity` 单文件、无状态层�
 - 明暗两套 Material 3 配色（取自 WeaveText 的蓝色方案）；启动图标使用
   `E:/work/pime` 的蓝色 PIME 标志，裁切出透明前景并生成自适应图标。
 
+### 启动器图标
+
+用户在 MuMu 12 上看过设置页后指出启动器图标不对：界面里的品牌标记是「蓝色圆 +
+白气泡」，而启动器画出来的是「白底 + 蓝色气泡」，正好反了。
+
+- 源资源只用一份 `drawable-nodpi/pime_logo.webp`：它的 alpha 就是气泡轮廓，
+  界面里 `tint` 成白色叠在蓝色圆上，启动器也同样用它的 alpha 描白色。
+- `tools/gen_launcher_icons.py` 从该 alpha 生成：各密度 `ic_launcher.webp`
+  （品牌蓝圆角方块 + 白气泡，圆角 22%）、`ic_launcher_round.webp`（蓝色圆 + 白气泡）、
+  以及自适应图标前景 `ic_launcher_foreground.webp`。
+- 自适应前景按规范收在 108dp 画布中央半径 31dp 的安全圆内（逐像素求最远点再缩放），
+  所以任何启动器遮罩都不会切到气泡。
+- `mipmap-anydpi-v26/ic_launcher{,_round}.xml` 的背景色改为品牌蓝 `#2267FA`，
+  前景指向 `@mipmap/ic_launcher_foreground`；同时删掉旧的 `mipmap-anydpi/`
+  位图兜底与两份不再引用的 `app_icon_blue*.webp`，各密度位图直接给 API 24/25 用。
+
+### 试输入框
+
+用户在 MuMu 12 上点首页的试验输入框，说「根本就不弹键盘」。
+
+- 复查后确认两件事：一，`EditText` 自己吃掉触摸，挂在它上面的 `OnClickListener`
+  永远不会触发，所以那行代码等于没写；二，输入框只能用**当前**输入法，若用户
+  还没把 PIME 设为默认，框里根本不会出现 PIME 的候选 —— 但界面此前对此一言不发。
+- 改成监听 `setOnFocusChangeListener`（点击的实际产物就是获得焦点），并在拿到焦点时
+  显式调用 `InputMethodManager.showSoftInput`，不再依赖系统「自动弹」的行为；
+  连接了物理键盘或系统设置成不自动弹时也能起来。
+- edge-to-edge 关掉了窗口自己的 resize，所以 insets 监听里把底部 padding 取
+  `max(systemBars.bottom, ime.bottom)`，键盘弹出时输入框不会被压住；
+  Activity 同时声明 `windowSoftInputMode="adjustResize"`。
+- 诚实反馈：PIME 不是当前输入法时，输入框的 helper 文案改成
+  「当前不是 PIME 输入法，输入走系统输入法」，并在首次点击时弹一次 Snackbar
+  （「这里只能用当前输入法，切到 PIME 才会出现候选」+「选择输入法」动作直接拉出选择器）。
+- 补 `onWindowFocusChanged` 里刷新状态：从输入法选择器对话框回来时 Activity 不会
+  `onResume`，否则状态胶囊与 helper 文案会停在旧值。
+
+### 行图标
+
+同一批问题里提到「图标啥的」：键盘与候选页当时复用了占位图标 ——「候选数量」用
+拼图、「主题」用信息图标、「按键振动」与「按键音」共用同一个滑杆。现在每行一个
+语义正确的图标：`ic_unfold_more`（高度）、`ic_vibration`、`ic_volume_up`、
+`ic_view_list`、`ic_contrast`、`ic_memory`（输入内核）。
+
+
 ### 宿主显示设置
 
 在 MuMu 12（Android 15 / x86_64）上验收 Material 3 设置页时，用户提出“设置里
@@ -261,6 +304,17 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   （就能就/就那就/技能就/今年就/就你就…），确认截断只作用于宿主显示条数。
   验证完把偏好文件删除（`run-as … rm shared_prefs/pime.xml`）恢复默认值，
   并把默认输入法还原为 Sogou、PIME 保持启用。
+- **图标与试输入框修复实测（2026-11-13 第六轮）**：`adb uninstall` 后全新安装，
+  启动器、最近任务、应用信息页、输入法列表里的图标统一为「品牌蓝底 + 白气泡」。
+  试输入框：把 PIME 设为当前输入法后点击即弹出 PIME 键盘，点 `g` 出候选
+  （个/给/跟/过/更），键盘弹出时输入框仍可见；把输入法切回 Sogou 后，点击会弹
+  Snackbar「这里只能用当前输入法，切到 PIME 才会出现候选」并带「选择输入法」动作。
+- **MuMu 12 上 Sogou 输入法不渲染（环境问题，非宿主缺陷）**：默认输入法为
+  Sogou 时，点击设置页输入框后 `dumpsys input_method` 报 `mInputShown=true`
+  但屏幕上没有任何键盘；用启动器自带的「搜索游戏和应用」输入框复现同样的现象，
+  说明是模拟器里 Sogou 自身的问题。把 PIME 设为当前输入法后同一位置点击即正常
+  弹出。为排除「物理键盘抑制软键盘」，也把 `show_ime_with_hard_keyboard` 试过 0/1
+  两档，结果一致；验证完已还原为 0。
 
 ## 对 core 的修改
 

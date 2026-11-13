@@ -58,6 +58,10 @@ public final class SettingsActivity extends AppCompatActivity {
     private LinearLayout detailContent;
     private TextView heroStatus;
     private LinearLayout heroSteps;
+    private android.widget.EditText testInput;
+    private com.google.android.material.textfield.TextInputLayout testInputLayout;
+    private boolean pimeIsCurrent;
+    private boolean warnedAboutOtherIme;
     private boolean inDetail;
     private Boolean lastEnabled;
     private Boolean lastCurrent;
@@ -73,8 +77,19 @@ public final class SettingsActivity extends AppCompatActivity {
         final View root = findViewById(R.id.root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             final Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            view.setPadding(0, bars.top, 0, bars.bottom);
+            // Edge-to-edge turns off the window's own resize, so the input method
+            // inset has to be applied by hand or the keyboard covers the field.
+            final Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            view.setPadding(0, bars.top, 0, Math.max(bars.bottom, ime.bottom));
             return insets;
+        });
+
+        testInput = findViewById(R.id.test_input);
+        testInputLayout = findViewById(R.id.test_input_layout);
+        // An EditText swallows taps itself, so an OnClickListener never fires;
+        // the focus change is what a tap actually produces.
+        testInput.setOnFocusChangeListener((view, hasFocus) -> {
+            if (hasFocus) showKeyboard(view);
         });
 
         // Wide screens (tablets, landscape) keep a 640dp reading column, matching
@@ -121,6 +136,14 @@ public final class SettingsActivity extends AppCompatActivity {
         refreshStatus();
     }
 
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // Switching the input method from the picker dialog never pauses the
+        // activity, so onResume alone would leave the status stale.
+        if (hasFocus) refreshStatus();
+    }
+
     // ------------------------------------------------------------------ home
 
     private void buildHomeRows() {
@@ -143,7 +166,7 @@ public final class SettingsActivity extends AppCompatActivity {
         addRow(about, R.drawable.ic_info, getString(R.string.row_about),
                 BuildConfig.VERSION_NAME, R.drawable.ic_chevron_right, v -> openAbout());
         addDivider(about);
-        addRow(about, R.drawable.ic_extension, getString(R.string.row_core),
+        addRow(about, R.drawable.ic_memory, getString(R.string.row_core),
                 getString(R.string.row_core_desc), 0, null);
     }
 
@@ -170,6 +193,13 @@ public final class SettingsActivity extends AppCompatActivity {
         heroStatus.setTextColor(color);
         heroStatus.setBackground(pill(color));
 
+        // The test field types through whichever input method is current, so say
+        // so plainly instead of letting it look broken.
+        pimeIsCurrent = current;
+        testInputLayout.setHelperText(current
+                ? getString(R.string.hero_test_helper)
+                : getString(R.string.hero_test_helper_other_ime));
+
         buildSteps(imm, enabled, current);
 
         // Confirm the change when the user comes back from the system pages.
@@ -180,6 +210,29 @@ public final class SettingsActivity extends AppCompatActivity {
         }
         lastEnabled = enabled;
         lastCurrent = current;
+    }
+
+    /**
+     * Tapping the field usually shows the input method on its own; asking
+     * explicitly is what makes it work when the system decides otherwise (a
+     * hardware keyboard being attached, for one).
+     */
+    private void showKeyboard(View view) {
+        view.requestFocus();
+        final InputMethodManager imm =
+                (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm == null) return;
+        imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT);
+        // Typing here can only ever go through the current input method, so once
+        // per visit offer to switch to PIME instead of quietly doing nothing for
+        // anyone who has not set it as the default yet.
+        if (!pimeIsCurrent && !warnedAboutOtherIme) {
+            warnedAboutOtherIme = true;
+            Snackbar.make(findViewById(R.id.root), R.string.hero_test_other_ime_snack,
+                            Snackbar.LENGTH_LONG)
+                    .setAction(R.string.step2_action, v -> imm.showInputMethodPicker())
+                    .show();
+        }
     }
 
     private void snack(int textRes) {
@@ -320,7 +373,7 @@ public final class SettingsActivity extends AppCompatActivity {
             addRow(versionCard, R.drawable.ic_extension, getString(R.string.row_plugins_count),
                     getString(R.string.plugins_count_value, pluginDirs().length), 0, null);
             addDivider(versionCard);
-            addRow(versionCard, R.drawable.ic_keyboard, getString(R.string.row_core),
+            addRow(versionCard, R.drawable.ic_memory, getString(R.string.row_core),
                     getString(R.string.row_core_desc), 0, null);
 
             addGroupTitle(parent, R.string.section_notes);
@@ -367,11 +420,11 @@ public final class SettingsActivity extends AppCompatActivity {
         enterDetail(R.string.page_settings, parent -> {
             addGroupTitle(parent, R.string.section_feel);
             final LinearLayout feel = addCard(parent);
-            addRow(feel, R.drawable.ic_keyboard, getString(R.string.row_height),
+            addRow(feel, R.drawable.ic_unfold_more, getString(R.string.row_height),
                     heightLabel(Prefs.keyboardPercent(this)),
                     R.drawable.ic_chevron_right, v -> chooseHeight());
             addDivider(feel);
-            addSwitchRow(feel, R.drawable.ic_tune, getString(R.string.row_vibrate),
+            addSwitchRow(feel, R.drawable.ic_vibration, getString(R.string.row_vibrate),
                     getString(R.string.row_vibrate_desc), Prefs.vibrate(this),
                     (button, checked) -> {
                         Prefs.setVibrate(this, checked);
@@ -381,17 +434,17 @@ public final class SettingsActivity extends AppCompatActivity {
                         }
                     });
             addDivider(feel);
-            addSwitchRow(feel, R.drawable.ic_tune, getString(R.string.row_sound),
+            addSwitchRow(feel, R.drawable.ic_volume_up, getString(R.string.row_sound),
                     getString(R.string.row_sound_desc), Prefs.sound(this),
                     (button, checked) -> Prefs.setSound(this, checked));
 
             addGroupTitle(parent, R.string.section_display);
             final LinearLayout display = addCard(parent);
-            addRow(display, R.drawable.ic_extension, getString(R.string.row_candidates),
+            addRow(display, R.drawable.ic_view_list, getString(R.string.row_candidates),
                     candidatesLabel(Prefs.candidates(this)),
                     R.drawable.ic_chevron_right, v -> chooseCandidates());
             addDivider(display);
-            addRow(display, R.drawable.ic_info, getString(R.string.row_theme),
+            addRow(display, R.drawable.ic_contrast, getString(R.string.row_theme),
                     themeLabel(Prefs.theme(this)), R.drawable.ic_chevron_right,
                     v -> chooseTheme());
 

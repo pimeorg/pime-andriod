@@ -55,6 +55,14 @@
       浅色/深色），偏好存 `SharedPreferences`
 - [x] MuMu 实测宿主偏好：高度 115% 键盘变高、候选数量 3 时候选栏只显示 3 个
       （改回“全部”同一输入出现 5 个以上）、主题改深色后立即重建，偏好落盘并复原
+- [x] 修启动器图标：品牌蓝底 + 白气泡（界面品牌标记与启动器一致），
+      `tools/gen_launcher_icons.py` 出各密度位图与自适应前景，删掉旧的
+      `mipmap-anydpi` 位图兜底
+- [x] 修试输入框：`EditText` 的 `OnClickListener` 不触发，改 `OnFocusChangeListener`
+      + 显式 `showSoftInput`；insets 里处理 IME 底部内边距
+- [x] 试输入框在 PIME 不是当前输入法时给出诚实提示（helper 文案 + Snackbar
+      带「选择输入法」动作），并补 `onWindowFocusChanged` 刷新状态
+- [x] 键盘与候选页每行换成语义正确的图标，不再复用拼图/信息/同一个滑杆
 - [ ] 设置页增加插件启停/多链管理（当前只读展示）
 - [ ] arm64 物理设备验证
 - [ ] release 签名与混淆
