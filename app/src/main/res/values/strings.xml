@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PIME 输入法</string>
+    <string name="ime_name">PIME 输入法（pime-core）</string>
+    <string name="subtype_label">中文 / 英文</string>
+</resources>

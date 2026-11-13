@@ -1,0 +1,60 @@
+plugins {
+    id "com.android.application"
+}
+
+def pimeCoreDir = new File(project.findProperty("pimeCoreDir")
+        ?: new File(rootProject.projectDir.parentFile, "pime-core").absolutePath)
+
+android {
+    namespace "dev.pime.ime"
+    compileSdk 36
+    ndkVersion "28.2.13676358"
+
+    defaultConfig {
+        applicationId "dev.pime.ime"
+        minSdk 24
+        targetSdk 36
+        versionCode 1
+        versionName "0.1.0"
+
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments "-DPIME_CORE_DIR=" + pimeCoreDir.absolutePath
+                cppFlags "-std=c++20"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.31.6"
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lint {
+        abortOnError false
+    }
+}
