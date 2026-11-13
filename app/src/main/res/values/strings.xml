@@ -65,5 +65,8 @@
 
     <string name="copy_path">复制路径</string>
     <string name="copied">已复制：%1$s</string>
+    <string name="snack_enabled">已启用 PIME 输入法</string>
+    <string name="snack_disabled">已停用 PIME 输入法</string>
+    <string name="snack_default">已切换为默认输入法</string>
     <string name="role_unknown">未知角色</string>
 </resources>

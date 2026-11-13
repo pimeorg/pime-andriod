@@ -55,6 +55,8 @@ public final class SettingsActivity extends AppCompatActivity {
     private TextView heroStatus;
     private LinearLayout heroSteps;
     private boolean inDetail;
+    private Boolean lastEnabled;
+    private Boolean lastCurrent;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -159,6 +161,19 @@ public final class SettingsActivity extends AppCompatActivity {
         heroStatus.setBackground(pill(color));
 
         buildSteps(imm, enabled, current);
+
+        // Confirm the change when the user comes back from the system pages.
+        if (lastEnabled != null && lastEnabled != enabled) {
+            snack(enabled ? R.string.snack_enabled : R.string.snack_disabled);
+        } else if (lastCurrent != null && !lastCurrent && current) {
+            snack(R.string.snack_default);
+        }
+        lastEnabled = enabled;
+        lastCurrent = current;
+    }
+
+    private void snack(int textRes) {
+        Snackbar.make(findViewById(R.id.root), textRes, Snackbar.LENGTH_SHORT).show();
     }
 
     private void buildSteps(InputMethodManager imm, boolean enabled, boolean current) {
@@ -530,7 +545,8 @@ public final class SettingsActivity extends AppCompatActivity {
             arrow.setImageResource(trailingIconRes);
             arrow.setImageTintList(ColorStateList.valueOf(
                     attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
-            arrow.setContentDescription(null);
+            arrow.setContentDescription(trailingIconRes == R.drawable.ic_copy
+                    ? getString(R.string.copy_path) : null);
             final LinearLayout.LayoutParams arrowParams = new LinearLayout.LayoutParams(dp(20), dp(20));
             arrowParams.setMarginStart(dp(8));
             row.addView(arrow, arrowParams);
