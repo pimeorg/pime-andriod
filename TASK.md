@@ -28,5 +28,10 @@
       `nh` → 你好
 - [x] 同步原始字母网格版 translate（`hbg` → 还不够）并重建 APK
 - [x] MuMu 实测三字母简拼：`hbg` 候选首位“还不够”，点击后提交成功
+- [x] 同步 20,066 条词表与 `kWordBonus=9000` 的 translate 包，重建 APK
+- [x] MuMu 多场景实测：`hbg`、`wanan`、`shengrikuaile`、`tiananmen`、
+      `nvhai`、`lvse`、`srkl`、`nhm`、`zgm`、`dhrs`、`nh`、`dd`、`wsm`、
+      `xian` 共 13 组，候选首位全部符合预期
+- [x] 记录 Android 侧 adb 连点退格被合并的测试注意点
 - [ ] arm64 物理设备验证
 - [ ] release 签名与图标
