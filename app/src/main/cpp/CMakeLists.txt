@@ -41,6 +41,11 @@ if(PIME_ENABLE_WASM AND EXISTS "${PIME_WAMR_DIR}/core/iwasm/include/wasm_export.
     set(WAMR_BUILD_TAIL_CALL 1)
     set(WAMR_BUILD_BULK_MEMORY 1)
     set(WAMR_BUILD_REF_TYPES 0)
+    # Bionic places the main thread's reported stack boundary inside ART's
+    # PROT_NONE guard page, so WAMR's guard-page probing faults during
+    # wasm_runtime_init. Linear-memory hardware bound checking stays on; the
+    # interpreter keeps its own stack-overflow check.
+    set(WAMR_DISABLE_STACK_HW_BOUND_CHECK 1)
     include("${PIME_WAMR_DIR}/build-scripts/runtime_lib.cmake")
 
     add_library(vmlib STATIC ${WAMR_RUNTIME_LIB_SOURCE})

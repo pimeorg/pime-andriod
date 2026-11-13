@@ -17,5 +17,8 @@
 - [x] 同步重建后的五个第一方插件包与 `default.cbor` 到 `assets/`
 - [x] JNI/Java 增加能力授权接口（`pime_core_permission`），启动时授予内置链声明的能力
 - [x] 宿主 smoke test：五包加载、链 build/activate、`nihao` → 候选 → 提交 `你好`
-- [ ] 真机/模拟器验证（本机无 adb 设备、无 AVD）
+- [x] 修复插件清单缺少 `android-x64` 导致模拟器上全部 `NOT_FOUND`
+- [x] 修复 WAMR 栈守卫探测在 Bionic 上的启动崩溃（关闭 native 栈边界检查）
+- [x] MuMu 12（Android 15 / x86_64）实测：插件加载、`nihao → 你好`、候选提交
+- [ ] arm64 物理设备验证
 - [ ] release 签名与图标

@@ -10,10 +10,14 @@
 
 本机工具链：JDK 21.0.8；SDK `E:/andiod/andriod-sdk`（platform 36、build-tools 36、
 NDK 28.2.13676358、CMake 3.31.6）；Gradle 8.14.5（缓存分发 + wrapper）；AGP
-8.13.2。无 adb 设备、无 AVD。
+8.13.2。
 
 后续继续要求：把 WASM 插件链真正跑起来并打进 APK（不是只留加载路径），因此本阶段
 集成了 WAMR、同步了插件包，并在 Windows 宿主上用同一份 core 验证了整条链。
+
+再后续：用户授权使用 MuMu 模拟器做实测。本机 MuMu 12（Nx）位于
+`t:/Program Files/Netease/MuMu`，VM 0 为 Android 15（API 35、x86_64，adb
+`127.0.0.1:16384`）。实测发现并修复了两个只在 Android 上出现的问题（见下）。
 
 ## 已完成
 
@@ -32,6 +36,7 @@ NDK 28.2.13676358、CMake 3.31.6）；Gradle 8.14.5（缓存分发 + wrapper）�
 | WAMR 2.4.1 静态链入（fast interpreter） | `app/src/main/cpp/CMakeLists.txt`、`third_party/wamr` |
 | 五个第一方 WASM 插件包与默认链随包发布 | `app/src/main/assets/plugins/`、`assets/chains/default.cbor` |
 | 宿主能力授权（`pime_core_permission`） | `pime_jni.cpp`、`PimeCore.java`、`PimeImeService.java` |
+| MuMu 12（Android 15 / x86_64）实机验证 | 见“验证” |
 | debug APK 产出 | `app/build/outputs/apk/debug/app-debug.apk` |
 | 宿主 smoke test | 临时工程（非仓库内），见下 |
 
@@ -86,6 +91,19 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
 （parse）、pinyin-translate（translate，带 `assets/pinyin.dict`）、pinyin-rank
 （rank）、candidates-format（format）。
 
+### Android 实测发现的两个问题
+
+1. **清单平台列表缺少 x64**：插件清单只列了 `android-arm64`，而 MuMu 为
+   `android-x64`，`Core::plugin_load` 的平台过滤直接返回 `PIME_NOT_FOUND`，
+   五个包全部加载失败。已在全部清单与模板中补上 `android-x64`、`ios-x64`、
+   `harmony-x64`。
+2. **WAMR 栈守卫探测在 Bionic 上崩溃**：`wasm_runtime_init` 会调用
+   `os_thread_get_stack_boundary()` 触碰栈页并 `mprotect` 守卫页。Bionic/ART
+   主线程返回的边界落在 `PROT_NONE` 守卫页内，首次 `wasm_runtime_init` 即
+   `SIGSEGV (SEGV_ACCERR)`。Android 构建改为
+   `WAMR_DISABLE_STACK_HW_BOUND_CHECK=1`：跳过栈守卫探测与 sigaltstack，
+   线性内存的硬件边界检查与解释器自身栈检查保留。
+
 ## 验证
 
 - `./gradlew assembleDebug` 成功；APK 含 `lib/arm64-v8a/libpime_jni.so` 与
@@ -97,6 +115,13 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   选择 0 后提交 `你好`。
 - 同一次 smoke 也验证了能力模型：未授权 `asset.read` 时 translate 打不开词典；
   授权后正常出词。
+- **MuMu 12 实测（Android 15 / API 35 / x86_64）**：安装 APK 后 `ime enable` +
+  `ime set`，在系统设置搜索框唤起键盘。logcat 显示五个插件
+  `plugin loaded`（无 warning），代 build/activate 成功。依次点击软键盘
+  `n i h a o`：组合串显示 `nihao`，候选栏为 `你好`；点击候选后提交，
+  设置搜索框内容变为 `你好`。与 Windows 宿主 smoke 结果一致。
+- 测试期间设备屏幕为 1600×900 横屏，density 240；组合/候选栏出现后键盘视图
+  高度由 224dp 收缩，坐标随之变化（输入过程中需按当前布局点击）。
 
 ## 对 core 的修改
 
@@ -109,9 +134,8 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
 ## 待完成 / 已知限制
 
 - Lua（`PIME_BUILD_LUA`）未启用：Lua 插件包仍不能在 APK 内执行；WASM 已经可用。
-- 未在真机/模拟器运行（无 adb 设备、无 AVD）；JNI 回调与 UI 只做了编译期与
-  Windows 宿主验证。宿主验证覆盖 core + 插件链，不覆盖 Android UI 线程与
-  `InputConnection` 行为。
+- 未在物理设备上运行：实测环境为 MuMu 12 的 Android 15 x86_64 模拟器，覆盖
+  JNI、WAMR 执行与 InputConnection 路径，但未覆盖 arm64 真机与厂商 ROM 差异。
 - 只有 debug 签名；未配置 release 签名、混淆、图标。
 - 链选择固定 `default.cbor`；未做多链/插件管理 UI。
 - 未使用 `pime_core_touch`（手写输入 UI 未实现）。
