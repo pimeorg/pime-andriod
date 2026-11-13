@@ -79,13 +79,22 @@ public final class SettingsActivity extends Activity {
     }
 
     private void refreshStatus() {
-        final String enabled = Settings.Secure.getString(getContentResolver(),
-                Settings.Secure.ENABLED_INPUT_METHODS);
-        final android.content.ComponentName component =
-                new android.content.ComponentName(this, PimeImeService.class);
-        final boolean on = enabled != null
-                && (enabled.contains(component.flattenToString())
-                || enabled.contains(component.flattenToShortString()));
+        // Do not read Settings.Secure.ENABLED_INPUT_METHODS: Android 15 only
+        // allows that to apps targeting API 33 or lower. The InputMethodManager
+        // list is the public, targetSdk-independent equivalent.
+        final InputMethodManager imm = (InputMethodManager)
+                getSystemService(INPUT_METHOD_SERVICE);
+        boolean on = false;
+        if (imm != null) {
+            final String self = getPackageName();
+            for (android.view.inputmethod.InputMethodInfo info
+                    : imm.getEnabledInputMethodList()) {
+                if (self.equals(info.getPackageName())) {
+                    on = true;
+                    break;
+                }
+            }
+        }
         status.setText(on ? "状态：已启用" : "状态：未启用");
         status.setTextColor(on ? 0xFF7BD88F : 0xFFE8A33D);
         status.setBackgroundColor(0xFF26282C);

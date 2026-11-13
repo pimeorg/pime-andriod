@@ -35,5 +35,8 @@
       `nvhai`、`lvse`、`srkl`、`nhm`、`zgm`、`dhrs`、`nh`、`dd`、`wsm`、
       `xian` 共 13 组，候选首位全部符合预期
 - [x] 记录 Android 侧 adb 连点退格被合并的测试注意点
+- [x] 修复设置页启动闪退：不再读取 Android 15 受限的
+      `Settings.Secure.ENABLED_INPUT_METHODS`，改用
+      `InputMethodManager.getEnabledInputMethodList()`；MuMu 冷启动验证通过
 - [ ] arm64 物理设备验证
 - [ ] release 签名与图标

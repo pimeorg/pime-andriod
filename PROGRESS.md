@@ -114,6 +114,12 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
    它会把组合串当作正文留在编辑器里（表现为提交后残留 `n`），改为
    `setComposingText("", 1)` 再结束组合；退格回传从 `sendKeyEvent(DEL)`
    改为 `deleteSurroundingText(1, 0)`，软键盘下前者在 SearchView 里不生效。
+5. **打开设置页立即闪退**：`SettingsActivity.refreshStatus()` 读取
+   `Settings.Secure.ENABLED_INPUT_METHODS` 判断是否启用。Android 15 起该键
+   只允许 `targetSdkVersion <= 33` 的应用读取，本应用 targetSdk 36，于是
+   `onResume` 抛 `SecurityException`，表现为点图标即闪退。改用
+   `InputMethodManager.getEnabledInputMethodList()`（公开 API，与 targetSdk
+   无关）按包名判断；Java 层不再读任何 `Settings.Secure` 键。
 
 ## 验证
 
@@ -162,6 +168,11 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
 - Android 实测操作注意：用 `adb shell input tap` 连点软键盘退格时，系统会
   合并/丢弃过快的事件；清空多字母组合串需约 1–2 秒一次地点击，或重新
   `ime set` 后从空输入框开始。该现象只影响自动化测试脚本，不影响手动输入。
+- **设置页启动修复实测（2026-11-13）**：重新构建并安装后，
+  `am start -W -n dev.pime.ime/.SettingsActivity` 冷启动返回
+  `Status: ok`、`LaunchState: COLD`，`topResumedActivity` 为设置页；
+  logcat 无 `AndroidRuntime` 异常，界面显示“状态：已启用”，插件目录与链
+  路径正常。
 
 ## 对 core 的修改
 
