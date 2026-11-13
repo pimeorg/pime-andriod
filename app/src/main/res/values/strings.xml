@@ -97,4 +97,7 @@
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
     <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏与主题），不改变分词、词典与候选排序——那些由插件链决定。</string>
+
+    <string name="ime_action_settings">键盘设置</string>
+    <string name="ime_action_hide">收起键盘</string>
 </resources>

@@ -1,10 +1,18 @@
 package dev.pime.ime;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.AssetManager;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.text.InputType;
+import android.text.TextUtils;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -14,6 +22,8 @@ import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -45,12 +55,18 @@ public final class PimeImeService extends InputMethodService
             "input.read", "workspace", "output.emit", "asset.read"
     };
 
+    private static final int TOP_BAR_HEIGHT_DP = 44;
+    private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
+    /** Keys are laid out inside the view; this is everything around the four rows. */
+    private static final float ROW_CHROME_DP = 9f + 7f + 8f * 3;
+
     private PimeCore core;
     private boolean coreReady;
     private KeyboardView keyboard;
     private LinearLayout candidateBar;
     private HorizontalScrollView candidateScroll;
     private TextView compositionView;
+    private String composition = "";
     private final List<String> candidates = new ArrayList<>();
 
     @Override
@@ -100,41 +116,124 @@ public final class PimeImeService extends InputMethodService
 
     @Override
     public View onCreateInputView() {
+        final KeyboardTheme palette = KeyboardTheme.of(this);
+
         final LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF17181B);
+        /* Any slack the window gives us goes above the bar, so the keys keep
+         * their place on screen when the candidate row comes and goes. */
+        root.setGravity(Gravity.BOTTOM);
+        root.setBackgroundColor(palette.board);
+
+        /* Top bar: the composition string, then the two host actions. */
+        final LinearLayout topBar = new LinearLayout(this);
+        topBar.setOrientation(LinearLayout.HORIZONTAL);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.setBackgroundColor(palette.bar);
 
         compositionView = new TextView(this);
-        compositionView.setTextColor(0xFFE8EAED);
+        compositionView.setTextColor(palette.onBar);
         compositionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         compositionView.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         compositionView.setGravity(Gravity.CENTER_VERTICAL);
-        compositionView.setPadding(dp(14), 0, dp(14), 0);
-        compositionView.setBackgroundColor(0xFF282A2E);
-        compositionView.setVisibility(View.GONE);
-        root.addView(compositionView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
+        compositionView.setSingleLine(true);
+        compositionView.setEllipsize(TextUtils.TruncateAt.START);
+        compositionView.setPadding(dp(16), 0, dp(8), 0);
+        topBar.addView(compositionView, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        topBar.addView(iconButton(R.drawable.ic_settings, palette,
+                R.string.ime_action_settings, v -> openSettings()));
+        topBar.addView(iconButton(R.drawable.ic_expand_more, palette,
+                R.string.ime_action_hide, v -> requestHideSelf(0)));
+        root.addView(topBar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(TOP_BAR_HEIGHT_DP)));
 
         candidateScroll = new HorizontalScrollView(this);
         candidateScroll.setHorizontalScrollBarEnabled(false);
-        candidateScroll.setBackgroundColor(0xFF1E1F22);
+        candidateScroll.setBackgroundColor(palette.bar);
+        candidateScroll.setFillViewport(true);
         candidateBar = new LinearLayout(this);
         candidateBar.setOrientation(LinearLayout.HORIZONTAL);
+        candidateBar.setGravity(Gravity.CENTER_VERTICAL);
         candidateScroll.addView(candidateBar, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         candidateScroll.setVisibility(View.GONE);
         root.addView(candidateScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(CANDIDATE_ROW_HEIGHT_DP)));
 
-        final int keyboardHeight =
-                dp(224 * Prefs.keyboardPercent(this) / 100);
+        final View divider = new View(this);
+        divider.setBackgroundColor(palette.divider);
+        root.addView(divider, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
+
+        final int keyboardHeight = keyboardHeight(palette);
         keyboard = new KeyboardView(this);
+        keyboard.setKeyboardTheme(palette);
         keyboard.setListener(this);
         root.addView(keyboard, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
 
-        root.setMinimumHeight(dp(38) + dp(44) + keyboardHeight);
+        root.setMinimumHeight(dp(TOP_BAR_HEIGHT_DP) + keyboardHeight);
         return root;
+    }
+
+    /**
+     * Four rows of keys. Landscape screens get shorter rows so the keyboard does
+     * not swallow the editor; portrait follows the screen height as well.
+     */
+    private int keyboardHeight(KeyboardTheme palette) {
+        final DisplayMetrics metrics = getResources().getDisplayMetrics();
+        final float screenHeightDp = metrics.heightPixels / metrics.density;
+        final boolean landscape =
+                getResources().getConfiguration().orientation
+                        == Configuration.ORIENTATION_LANDSCAPE;
+        float rowDp = landscape
+                ? screenHeightDp * 0.105f
+                : screenHeightDp * 0.072f;
+        rowDp = Math.max(landscape ? 34f : 42f, Math.min(rowDp, landscape ? 48f : 60f));
+        final int total = Math.round(rowDp * 4 + ROW_CHROME_DP);
+        return dp(total * Prefs.keyboardPercent(this) / 100);
+    }
+
+    private ImageButton iconButton(int iconRes, KeyboardTheme palette, int descRes,
+                                   View.OnClickListener action) {
+        final ImageButton button = new ImageButton(this);
+        button.setImageResource(iconRes);
+        button.setColorFilter(palette.hint);
+        button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        button.setContentDescription(getString(descRes));
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
+        button.setBackground(ripple(null, palette));
+        button.setOnClickListener(action);
+        button.setLayoutParams(new LinearLayout.LayoutParams(dp(44),
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        return button;
+    }
+
+    /** Rounded pill with a themed ripple; {@code fill} 0 keeps it transparent. */
+    private Drawable ripple(Drawable fill, KeyboardTheme palette) {
+        return new RippleDrawable(ColorStateList.valueOf(palette.ripple), fill, null);
+    }
+
+    private void openSettings() {
+        final Intent intent = new Intent(this, SettingsActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
+    }
+
+    /**
+     * The palette is resolved once, when the view is built, and the key size
+     * follows the screen. So a theme or orientation change rebuilds the view and
+     * puts the composition and candidates back.
+     */
+    @Override
+    public void onConfigurationChanged(Configuration config) {
+        super.onConfigurationChanged(config);
+        if (keyboard == null) return;
+        setInputView(onCreateInputView());
+        compositionView.setText(composition);
+        if (!candidates.isEmpty()) onCandidates(candidates.toArray(new String[0]));
     }
 
     @Override
@@ -177,6 +276,7 @@ public final class PimeImeService extends InputMethodService
             core.pump();
         }
         hideCandidates();
+        composition = "";
         if (compositionView != null) {
             compositionView.setText("");
             compositionView.setVisibility(View.GONE);
@@ -243,6 +343,7 @@ public final class PimeImeService extends InputMethodService
 
     @Override
     public void onComposition(String text, int cursor) {
+        composition = text == null ? "" : text;
         if (compositionView == null) return;
         compositionView.setText(text);
         compositionView.setVisibility(
@@ -263,6 +364,7 @@ public final class PimeImeService extends InputMethodService
     public void onCommit(String text) {
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null && text != null && !text.isEmpty()) ic.commitText(text, 1);
+        composition = "";
         if (compositionView != null) {
             compositionView.setText("");
             compositionView.setVisibility(View.GONE);
@@ -280,26 +382,41 @@ public final class PimeImeService extends InputMethodService
             hideCandidates();
             return;
         }
-        final TypedValue ripple = new TypedValue();
-        getTheme().resolveAttribute(android.R.attr.selectableItemBackground,
-                ripple, true);
+        final KeyboardTheme palette = KeyboardTheme.of(this);
         final int limit = Prefs.candidates(this);
         final int count = limit > 0 ? Math.min(limit, items.length) : items.length;
         for (int i = 0; i < count; ++i) {
-            final TextView item = new TextView(this);
-            item.setText(items[i]);
-            item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
-            item.setTextColor(0xFFE8EAED);
-            item.setGravity(Gravity.CENTER);
-            item.setPadding(dp(16), 0, dp(16), 0);
-            if (ripple.resourceId != 0) item.setBackgroundResource(ripple.resourceId);
-            final int index = i;
-            item.setOnClickListener(v -> selectCandidate(index));
-            candidateBar.addView(item, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT));
+            candidateBar.addView(candidateItem(items[i], i, palette));
         }
         candidateScroll.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * The chain's first candidate gets the accent pill; the rest are plain, so
+     * the eye lands on the one a tap on space would take.
+     */
+    private TextView candidateItem(String text, int index, KeyboardTheme palette) {
+        final boolean first = index == 0;
+        final TextView item = new TextView(this);
+        item.setText(text);
+        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, first ? 20 : 19);
+        item.setTextColor(first ? palette.accent : palette.candidateText);
+        item.setTypeface(Typeface.create("sans-serif",
+                first ? Typeface.BOLD : Typeface.NORMAL));
+        item.setGravity(Gravity.CENTER);
+        item.setSingleLine(true);
+        item.setPadding(dp(16), 0, dp(16), 0);
+        final GradientDrawable pill = new GradientDrawable();
+        pill.setCornerRadius(dp(18));
+        pill.setColor(first ? palette.accentSoft : 0);
+        item.setBackground(ripple(pill, palette));
+        item.setOnClickListener(v -> selectCandidate(index));
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT);
+        params.setMargins(dp(4), dp(7), first ? dp(4) : 0, dp(7));
+        item.setLayoutParams(params);
+        return item;
     }
 
     @Override

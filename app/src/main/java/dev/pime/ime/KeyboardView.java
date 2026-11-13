@@ -3,6 +3,7 @@ package dev.pime.ime;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.media.AudioManager;
 import android.os.Handler;
@@ -19,6 +20,10 @@ import java.util.List;
 /**
  * Keyboard surface. It only reports key presses; whether a key is consumed by
  * pime-core or passed to the editor is decided by the service.
+ *
+ * Two pages (letters and symbols) of four rows each. Everything is drawn here
+ * rather than assembled from child views so a key press costs no allocation and
+ * the whole surface reacts as one.
  */
 public final class KeyboardView extends View {
     public static final int KIND_CHAR = 0;
@@ -26,6 +31,11 @@ public final class KeyboardView extends View {
     public static final int KIND_BACKSPACE = 2;
     public static final int KIND_SPACE = 3;
     public static final int KIND_ENTER = 4;
+    public static final int KIND_SYMBOLS = 5;
+    public static final int KIND_LETTERS = 6;
+
+    private static final int PAGE_LETTERS = 0;
+    private static final int PAGE_SYMBOLS = 1;
 
     public static final class Key {
         public final String label;
@@ -49,15 +59,24 @@ public final class KeyboardView extends View {
         void onKey(Key key);
     }
 
-    private final List<List<Key>> rows = new ArrayList<>();
+    @SuppressWarnings("unchecked")
+    private final List<List<Key>>[] pages = new List[2];
+    private int page = PAGE_LETTERS;
     private RectF[][] bounds;
+    private int boundsPage = -1;
     private Listener listener;
+    private KeyboardTheme theme;
     private boolean shift;
     private int pressedRow = -1;
     private int pressedCol = -1;
 
     private final Paint keyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint edgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint glyphPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path glyphPath = new Path();
+    private final RectF keyRect = new RectF();
+    private final RectF edgeRect = new RectF();
     private final Handler repeatHandler = new Handler(Looper.getMainLooper());
     private Key repeatKey;
 
@@ -77,10 +96,12 @@ public final class KeyboardView extends View {
 
     public KeyboardView(Context context, AttributeSet attrs) {
         super(context, attrs);
-        setBackgroundColor(0xFF202124);
-        textPaint.setColor(0xFFE8EAED);
+        theme = KeyboardTheme.of(context);
         textPaint.setTextAlign(Paint.Align.CENTER);
-        buildRows();
+        glyphPaint.setStyle(Paint.Style.STROKE);
+        glyphPaint.setStrokeCap(Paint.Cap.ROUND);
+        glyphPaint.setStrokeJoin(Paint.Join.ROUND);
+        buildPages();
         setFocusable(true);
     }
 
@@ -88,39 +109,73 @@ public final class KeyboardView extends View {
         this.listener = listener;
     }
 
+    public void setKeyboardTheme(KeyboardTheme theme) {
+        this.theme = theme;
+        invalidate();
+    }
+
     public boolean isShiftDown() {
         return shift;
     }
 
-    private void buildRows() {
-        rows.add(chars("1234567890"));
+    private void buildPages() {
+        pages[PAGE_LETTERS] = letterPage();
+        pages[PAGE_SYMBOLS] = symbolPage();
+    }
+
+    private List<List<Key>> letterPage() {
+        final List<List<Key>> rows = new ArrayList<>(4);
         rows.add(chars("qwertyuiop"));
         rows.add(chars("asdfghjkl"));
 
-        List<Key> third = new ArrayList<>();
+        final List<Key> third = new ArrayList<>();
         third.add(new Key("⇧", 0, 1.5f, KIND_SHIFT));
         third.addAll(chars("zxcvbnm"));
-        // Plugin keymaps match ASCII control codes (BS/CR), not the HAL's
-        // 0x01000000 special range, so send the legacy values.
         third.add(new Key("⌫", 8, 1.5f, KIND_BACKSPACE));
         rows.add(third);
 
-        List<Key> bottom = new ArrayList<>();
-        bottom.add(new Key(",", ',', 1.2f, KIND_CHAR));
-        bottom.add(new Key("空格", ' ', 5f, KIND_SPACE));
-        bottom.add(new Key(".", '.', 1.2f, KIND_CHAR));
-        bottom.add(new Key("回车", 13, 1.6f, KIND_ENTER));
+        final List<Key> bottom = new ArrayList<>();
+        bottom.add(new Key("符", 0, 1.2f, KIND_SYMBOLS));
+        bottom.add(new Key(",", ',', 0.9f, KIND_CHAR));
+        bottom.add(new Key("空格", ' ', 4.6f, KIND_SPACE));
+        bottom.add(new Key(".", '.', 0.9f, KIND_CHAR));
+        bottom.add(new Key("回车", 13, 1.8f, KIND_ENTER));
         rows.add(bottom);
+        return rows;
+    }
+
+    private List<List<Key>> symbolPage() {
+        final List<List<Key>> rows = new ArrayList<>(4);
+        rows.add(chars("1234567890"));
+        rows.add(chars("@#¥&*()-+/"));
+
+        final List<Key> third = new ArrayList<>();
+        third.add(new Key("ABC", 0, 1.5f, KIND_LETTERS));
+        third.addAll(chars(":;'\"?!"));
+        third.add(new Key("⌫", 8, 1.5f, KIND_BACKSPACE));
+        rows.add(third);
+
+        final List<Key> bottom = new ArrayList<>();
+        bottom.add(new Key("字母", 0, 1.2f, KIND_LETTERS));
+        bottom.add(new Key("，", ',', 0.9f, KIND_CHAR));
+        bottom.add(new Key("空格", ' ', 4.6f, KIND_SPACE));
+        bottom.add(new Key("。", '.', 0.9f, KIND_CHAR));
+        bottom.add(new Key("回车", 13, 1.8f, KIND_ENTER));
+        rows.add(bottom);
+        return rows;
     }
 
     private static List<Key> chars(String letters) {
-        List<Key> keys = new ArrayList<>(letters.length());
+        final List<Key> keys = new ArrayList<>(letters.length());
         for (int i = 0; i < letters.length(); ++i) {
             final char c = letters.charAt(i);
-            keys.add(new Key(String.valueOf(c), Character.toLowerCase(c), 1f,
-                    KIND_CHAR));
+            keys.add(new Key(String.valueOf(c), c, 1f, KIND_CHAR));
         }
         return keys;
+    }
+
+    private List<Key> row(int r) {
+        return pages[page].get(r);
     }
 
     @Override
@@ -130,63 +185,173 @@ public final class KeyboardView extends View {
     }
 
     private void layoutKeys(int width, int height) {
-        final float outer = dp(4);
-        final float gap = dp(4);
-        final float rowGap = dp(4);
+        final List<List<Key>> rows = pages[page];
+        final float padH = dp(4);
+        final float padTop = dp(9);
+        final float padBottom = dp(7);
+        final float gap = dp(6);
+        final float rowGap = dp(8);
         final int rowCount = rows.size();
-        final float rowHeight =
-                (height - outer * 2 - rowGap * (rowCount - 1)) / rowCount;
+        final float rowHeight = (height - padTop - padBottom
+                - rowGap * (rowCount - 1)) / rowCount;
         bounds = new RectF[rowCount][];
         for (int r = 0; r < rowCount; ++r) {
-            final List<Key> row = rows.get(r);
+            final List<Key> keys = rows.get(r);
             float total = 0;
-            for (Key key : row) total += key.weight;
-            final float available = width - outer * 2 - gap * (row.size() - 1);
-            final float y = outer + r * (rowHeight + rowGap);
-            float x = outer;
-            bounds[r] = new RectF[row.size()];
-            for (int c = 0; c < row.size(); ++c) {
-                final float kw = available * row.get(c).weight / total;
+            for (Key key : keys) total += key.weight;
+            final float available = width - padH * 2 - gap * (keys.size() - 1);
+            final float y = padTop + r * (rowHeight + rowGap);
+            float x = padH;
+            bounds[r] = new RectF[keys.size()];
+            for (int c = 0; c < keys.size(); ++c) {
+                final float kw = available * keys.get(c).weight / total;
                 bounds[r][c] = new RectF(x, y, x + kw, y + rowHeight);
                 x += kw + gap;
             }
         }
+        boundsPage = page;
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        if (bounds == null) return;
-        final float radius = dp(6);
+        canvas.drawColor(theme.board);
+        if (bounds == null || boundsPage != page) return;
         for (int r = 0; r < bounds.length; ++r) {
             for (int c = 0; c < bounds[r].length; ++c) {
-                final Key key = rows.get(r).get(c);
-                final boolean pressed = r == pressedRow && c == pressedCol;
-                keyPaint.setColor(pressed ? 0xFF5F6368 : colorFor(key));
-                canvas.drawRoundRect(bounds[r][c], radius, radius, keyPaint);
-                drawLabel(canvas, bounds[r][c], key);
+                drawKey(canvas, row(r).get(c), bounds[r][c],
+                        r == pressedRow && c == pressedCol);
             }
         }
     }
 
-    private int colorFor(Key key) {
-        if (key.kind == KIND_SHIFT && shift) return 0xFF8AB4F8;
-        if (key.kind == KIND_CHAR && key.code >= '0' && key.code <= '9') {
-            return 0xFF303134;
+    private void drawKey(Canvas canvas, Key key, RectF rect, boolean pressed) {
+        final int face;
+        final int edge;
+        final int label;
+        final boolean onAccent;
+        switch (key.kind) {
+            case KIND_SHIFT:
+                onAccent = shift;
+                face = shift ? (pressed ? theme.accentPressed : theme.accent)
+                        : (pressed ? theme.keyFuncPressed : theme.keyFunc);
+                edge = shift ? 0 : theme.keyFuncEdge;
+                label = shift ? theme.onAccent : theme.keyFuncText;
+                break;
+            case KIND_ENTER:
+                onAccent = true;
+                face = pressed ? theme.accentPressed : theme.accent;
+                edge = 0;
+                label = theme.onAccent;
+                break;
+            case KIND_CHAR:
+                onAccent = false;
+                face = pressed ? theme.keyPressed : theme.key;
+                edge = theme.keyEdge;
+                label = theme.keyText;
+                break;
+            default:
+                onAccent = false;
+                face = pressed ? theme.keyFuncPressed : theme.keyFunc;
+                edge = theme.keyFuncEdge;
+                label = theme.keyFuncText;
+                break;
         }
-        return 0xFF3C4043;
+
+        final float radius = dp(9);
+        final float cap = pressed ? 0 : dp(1.5f);
+        if (cap > 0) {
+            edgeRect.set(rect.left, rect.top + cap, rect.right, rect.bottom);
+            edgePaint.setColor(edge);
+            canvas.drawRoundRect(edgeRect, radius, radius, edgePaint);
+        }
+        keyRect.set(rect.left, rect.top, rect.right, rect.bottom - cap);
+        keyPaint.setColor(face);
+        canvas.drawRoundRect(keyRect, radius, radius, keyPaint);
+
+        final float cx = keyRect.centerX();
+        final float cy = keyRect.centerY();
+        switch (key.kind) {
+            case KIND_SHIFT:
+                drawShift(canvas, cx, cy, label);
+                break;
+            case KIND_BACKSPACE:
+                drawBackspace(canvas, cx, cy, label);
+                break;
+            case KIND_ENTER:
+                drawEnter(canvas, cx, cy, label);
+                break;
+            default:
+                drawLabel(canvas, key, cx, cy, label, onAccent);
+                break;
+        }
     }
 
-    private void drawLabel(Canvas canvas, RectF rect, Key key) {
+    private void drawLabel(Canvas canvas, Key key, float cx, float cy,
+                           int color, boolean onAccent) {
         String label = key.label;
         if (shift && key.isLetter()) label = label.toUpperCase();
-        final float size = label.length() > 1 ? 16f : 22f;
-        textPaint.setTextSize(size * getResources().getDisplayMetrics().scaledDensity);
-        textPaint.setColor(key.kind == KIND_SHIFT && shift ? 0xFF202124 : 0xFFE8EAED);
+        final float sp = label.length() > 1 ? 15f : 22f;
+        textPaint.setTextSize(sp * getResources().getDisplayMetrics().scaledDensity);
+        textPaint.setColor(color);
+        textPaint.setFakeBoldText(onAccent || (shift && !key.isLetter()));
         final Paint.FontMetrics metrics = textPaint.getFontMetrics();
-        final float baseline =
-                rect.centerY() - (metrics.ascent + metrics.descent) / 2f;
-        canvas.drawText(label, rect.centerX(), baseline, textPaint);
+        canvas.drawText(label, cx, cy - (metrics.ascent + metrics.descent) / 2f,
+                textPaint);
+    }
+
+    private void drawShift(Canvas canvas, float cx, float cy, int color) {
+        final float s = dp(9);
+        glyphPaint.setColor(color);
+        glyphPaint.setStrokeWidth(dp(2.1f));
+        glyphPath.reset();
+        glyphPath.moveTo(cx - s, cy + s * 0.1f);
+        glyphPath.lineTo(cx, cy - s * 0.85f);
+        glyphPath.lineTo(cx + s, cy + s * 0.1f);
+        canvas.drawPath(glyphPath, glyphPaint);
+        glyphPath.reset();
+        glyphPath.moveTo(cx, cy - s * 0.5f);
+        glyphPath.lineTo(cx, cy + s);
+        canvas.drawPath(glyphPath, glyphPaint);
+    }
+
+    private void drawBackspace(Canvas canvas, float cx, float cy, int color) {
+        final float s = dp(10);
+        glyphPaint.setColor(color);
+        glyphPaint.setStrokeWidth(dp(1.9f));
+        glyphPath.reset();
+        glyphPath.moveTo(cx + s, cy - s * 0.72f);
+        glyphPath.lineTo(cx - s * 0.45f, cy - s * 0.72f);
+        glyphPath.lineTo(cx - s, cy);
+        glyphPath.lineTo(cx - s * 0.45f, cy + s * 0.72f);
+        glyphPath.lineTo(cx + s, cy + s * 0.72f);
+        glyphPath.close();
+        canvas.drawPath(glyphPath, glyphPaint);
+        final float x = cx + s * 0.12f;
+        final float d = s * 0.26f;
+        glyphPath.reset();
+        glyphPath.moveTo(x - d, cy - d);
+        glyphPath.lineTo(x + d, cy + d);
+        glyphPath.moveTo(x + d, cy - d);
+        glyphPath.lineTo(x - d, cy + d);
+        canvas.drawPath(glyphPath, glyphPaint);
+    }
+
+    private void drawEnter(Canvas canvas, float cx, float cy, int color) {
+        final float s = dp(9);
+        glyphPaint.setColor(color);
+        glyphPaint.setStrokeWidth(dp(2.1f));
+        glyphPath.reset();
+        glyphPath.moveTo(cx + s, cy - s * 0.5f);
+        glyphPath.lineTo(cx + s, cy + s * 0.55f);
+        glyphPath.lineTo(cx - s * 0.95f, cy + s * 0.55f);
+        canvas.drawPath(glyphPath, glyphPaint);
+        glyphPath.reset();
+        glyphPath.moveTo(cx - s * 0.95f, cy + s * 0.55f);
+        glyphPath.lineTo(cx - s * 0.3f, cy - s * 0.1f);
+        glyphPath.moveTo(cx - s * 0.95f, cy + s * 0.55f);
+        glyphPath.lineTo(cx - s * 0.3f, cy + s * 1.2f);
+        canvas.drawPath(glyphPath, glyphPaint);
     }
 
     @Override
@@ -198,9 +363,8 @@ public final class KeyboardView extends View {
                 pressedRow = hit[0];
                 pressedCol = hit[1];
                 invalidate();
-                Key key = rows.get(pressedRow).get(pressedCol);
-                if (key.kind == KIND_BACKSPACE) {
-                    repeatKey = key;
+                if (row(pressedRow).get(pressedCol).kind == KIND_BACKSPACE) {
+                    repeatKey = row(pressedRow).get(pressedCol);
                     repeatHandler.postDelayed(repeatRunnable, 350);
                 }
                 return true;
@@ -208,11 +372,11 @@ public final class KeyboardView extends View {
             case MotionEvent.ACTION_MOVE: {
                 if (pressedRow < 0) return false;
                 int[] hit = hitTest(event.getX(), event.getY());
-                int row = hit == null ? -1 : hit[0];
-                int col = hit == null ? -1 : hit[1];
-                if (row != pressedRow || col != pressedCol) {
-                    pressedRow = row;
-                    pressedCol = col;
+                int r = hit == null ? -1 : hit[0];
+                int c = hit == null ? -1 : hit[1];
+                if (r != pressedRow || c != pressedCol) {
+                    pressedRow = r;
+                    pressedCol = c;
                     invalidate();
                 }
                 return true;
@@ -222,7 +386,7 @@ public final class KeyboardView extends View {
                 int[] hit = hitTest(event.getX(), event.getY());
                 final boolean same = hit != null && hit[0] == pressedRow
                         && hit[1] == pressedCol;
-                final Key key = rows.get(pressedRow).get(pressedCol);
+                final Key key = row(pressedRow).get(pressedCol);
                 clearPressed();
                 if (same) fire(key);
                 return true;
@@ -249,6 +413,22 @@ public final class KeyboardView extends View {
             invalidate();
             return;
         }
+        if (key.kind == KIND_SYMBOLS || key.kind == KIND_LETTERS) {
+            feedback();
+            page = key.kind == KIND_SYMBOLS ? PAGE_SYMBOLS : PAGE_LETTERS;
+            layoutKeys(getWidth(), getHeight());
+            invalidate();
+            return;
+        }
+        feedback();
+        if (listener != null) listener.onKey(key);
+        if (shift && key.isLetter()) {
+            shift = false;
+            invalidate();
+        }
+    }
+
+    private void feedback() {
         final Context context = getContext();
         if (Prefs.vibrate(context)) {
             performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
@@ -258,15 +438,10 @@ public final class KeyboardView extends View {
                     (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
             if (audio != null) audio.playSoundEffect(SoundEffectConstants.CLICK);
         }
-        if (listener != null) listener.onKey(key);
-        if (shift && key.isLetter()) {
-            shift = false;
-            invalidate();
-        }
     }
 
     private int[] hitTest(float x, float y) {
-        if (bounds == null) return null;
+        if (bounds == null || boundsPage != page) return null;
         for (int r = 0; r < bounds.length; ++r) {
             for (int c = 0; c < bounds[r].length; ++c) {
                 if (bounds[r][c].contains(x, y)) return new int[] {r, c};
