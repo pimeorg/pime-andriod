@@ -91,18 +91,29 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
 （parse）、pinyin-translate（translate，带 `assets/pinyin.dict`）、pinyin-rank
 （rank）、candidates-format（format）。
 
-### Android 实测发现的两个问题
+### Android 实测发现的问题
 
 1. **清单平台列表缺少 x64**：插件清单只列了 `android-arm64`，而 MuMu 为
    `android-x64`，`Core::plugin_load` 的平台过滤直接返回 `PIME_NOT_FOUND`，
    五个包全部加载失败。已在全部清单与模板中补上 `android-x64`、`ios-x64`、
    `harmony-x64`。
-2. **WAMR 栈守卫探测在 Bionic 上崩溃**：`wasm_runtime_init` 会调用
-   `os_thread_get_stack_boundary()` 触碰栈页并 `mprotect` 守卫页。Bionic/ART
+2. **WAMR 栈守卫探测在 Bionic 上崩溃**：`wasm_runtime_init` 调用 `touch_pages()`
+   触碰栈页并 `mprotect` 守卫页。Bionic/ART
    主线程返回的边界落在 `PROT_NONE` 守卫页内，首次 `wasm_runtime_init` 即
    `SIGSEGV (SEGV_ACCERR)`。Android 构建改为
    `WAMR_DISABLE_STACK_HW_BOUND_CHECK=1`：跳过栈守卫探测与 sigaltstack，
    线性内存的硬件边界检查与解释器自身栈检查保留。
+3. **候选提交后组合串不重置（插件侧）**：parse 插件在 `candidate` 事件里直接清空
+   `buf`，导致同一次链调用中 translate/format 看不到提交前的码串，候选提交静默
+   失败；不清空又会残留到下一次组合（`nihao` 提交后再输入得到 `nihaoq`）。
+   最终设计：`candidate` / `space` / `enter` 视为“提交阶段”，parse 本次仍写出
+   提交前码串（供 format 定位候选），但 `state.buf` 写空且不再发
+   `set_composition`；键位插件只映射 `action`，不再把所有控制键标记为
+   `handled`，否则空组合下的退格无法回传编辑器。
+4. **宿主 InputConnection 适配**：空组合时曾用 `finishComposingText()`，
+   它会把组合串当作正文留在编辑器里（表现为提交后残留 `n`），改为
+   `setComposingText("", 1)` 再结束组合；退格回传从 `sendKeyEvent(DEL)`
+   改为 `deleteSurroundingText(1, 0)`，软键盘下前者在 SearchView 里不生效。
 
 ## 验证
 
@@ -122,6 +133,11 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   设置搜索框内容变为 `你好`。与 Windows 宿主 smoke 结果一致。
 - 测试期间设备屏幕为 1600×900 横屏，density 240；组合/候选栏出现后键盘视图
   高度由 224dp 收缩，坐标随之变化（输入过程中需按当前布局点击）。
+- **候选提交与状态复位实测**：`n i` → 候选 `你 / 你好 / 您`，点 `你` 后搜索框
+  变为已提交的 `你`（组合串消失）；随后按 `n` 组合串为单独的 `n`（不再拼接旧码
+  `nin`）；退格一次清空组合串，再退格一次由编辑器删除已提交的 `你`，搜索框回到
+  空状态。三条路径同时验证了插件 `state` 复位、`set_composition("")` 结束组合、
+  以及空组合退格回传编辑器。
 
 ## 对 core 的修改
 

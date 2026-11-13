@@ -207,10 +207,9 @@ public final class PimeImeService extends InputMethodService
         if (ic == null) return;
         switch (key.kind) {
             case KeyboardView.KIND_BACKSPACE:
-                ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN,
-                        KeyEvent.KEYCODE_DEL));
-                ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_UP,
-                        KeyEvent.KEYCODE_DEL));
+                /* Soft keyboards cannot rely on sendKeyEvent reaching text
+                 * fields; deleteSurroundingText is the supported path. */
+                ic.deleteSurroundingText(1, 0);
                 break;
             case KeyboardView.KIND_ENTER:
                 ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN,
@@ -249,6 +248,9 @@ public final class PimeImeService extends InputMethodService
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         if (text == null || text.isEmpty()) {
+            /* Clearing the composition must also drop the text it had placed
+             * in the editor; finishComposingText would commit it instead. */
+            ic.setComposingText("", 1);
             ic.finishComposingText();
         } else {
             ic.setComposingText(text, Math.max(1, cursor + 1));

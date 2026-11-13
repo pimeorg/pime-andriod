@@ -20,5 +20,8 @@
 - [x] 修复插件清单缺少 `android-x64` 导致模拟器上全部 `NOT_FOUND`
 - [x] 修复 WAMR 栈守卫探测在 Bionic 上的启动崩溃（关闭 native 栈边界检查）
 - [x] MuMu 12（Android 15 / x86_64）实测：插件加载、`nihao → 你好`、候选提交
+- [x] 实测修复：候选提交后组合状态复位（parse 提交阶段保留 workspace、清空 state）
+- [x] 实测修复：空组合退格回传编辑器（keymap 不再吞键、`deleteSurroundingText`）
+- [x] 实测修复：结束组合用 `setComposingText("", 1)`，避免残留组合串
 - [ ] arm64 物理设备验证
 - [ ] release 签名与图标
