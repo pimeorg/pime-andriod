@@ -9,6 +9,7 @@
     <string name="hero_title">PIME 输入法</string>
     <string name="hero_tagline">让输入顺手一点</string>
     <string name="hero_test_hint">在这里试试输入…</string>
+    <string name="hero_test_helper">试试 nihao、hbg、zsh</string>
 
     <string name="status_pill_ready">● 已就绪</string>
     <string name="status_pill_enabled">● 已启用，未切换</string>

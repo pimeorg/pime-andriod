@@ -26,6 +26,8 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.transition.Fade;
+import androidx.transition.TransitionManager;
 
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.button.MaterialButton;
@@ -116,21 +118,21 @@ public final class SettingsActivity extends AppCompatActivity {
     private void buildHomeRows() {
         final LinearLayout keyboard = findViewById(R.id.keyboard_rows);
         addRow(keyboard, R.drawable.ic_keyboard, getString(R.string.row_ime),
-                getString(R.string.row_ime_desc), true,
+                getString(R.string.row_ime_desc), R.drawable.ic_chevron_right,
                 v -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
         addDivider(keyboard);
         addRow(keyboard, R.drawable.ic_extension, getString(R.string.row_plugins),
-                pluginSummary(), true, v -> openPlugins());
+                pluginSummary(), R.drawable.ic_chevron_right, v -> openPlugins());
         addDivider(keyboard);
         addRow(keyboard, R.drawable.ic_folder, getString(R.string.row_storage),
-                "files/plugins · files/chains", true, v -> openStorage());
+                "files/plugins · files/chains", R.drawable.ic_chevron_right, v -> openStorage());
 
         final LinearLayout about = findViewById(R.id.about_rows);
         addRow(about, R.drawable.ic_info, getString(R.string.row_about),
-                BuildConfig.VERSION_NAME, true, v -> openAbout());
+                BuildConfig.VERSION_NAME, R.drawable.ic_chevron_right, v -> openAbout());
         addDivider(about);
         addRow(about, R.drawable.ic_extension, getString(R.string.row_core),
-                getString(R.string.row_core_desc), false, null);
+                getString(R.string.row_core_desc), 0, null);
     }
 
     private void refreshStatus() {
@@ -288,20 +290,20 @@ public final class SettingsActivity extends AppCompatActivity {
             addGroupTitle(parent, R.string.section_version);
             final LinearLayout versionCard = addCard(parent);
             addRow(versionCard, R.drawable.ic_info, getString(R.string.row_version),
-                    BuildConfig.VERSION_NAME + (BuildConfig.DEBUG ? "（debug）" : ""), false, null);
+                    BuildConfig.VERSION_NAME + (BuildConfig.DEBUG ? "（debug）" : ""), 0, null);
             addDivider(versionCard);
             addRow(versionCard, R.drawable.ic_extension, getString(R.string.row_plugins_count),
-                    getString(R.string.plugins_count_value, pluginDirs().length), false, null);
+                    getString(R.string.plugins_count_value, pluginDirs().length), 0, null);
             addDivider(versionCard);
             addRow(versionCard, R.drawable.ic_keyboard, getString(R.string.row_core),
-                    getString(R.string.row_core_desc), false, null);
+                    getString(R.string.row_core_desc), 0, null);
 
             addGroupTitle(parent, R.string.section_notes);
             final LinearLayout notesCard = addCard(parent);
             addTextBlock(notesCard, getString(R.string.about_intro));
-            addDivider(notesCard);
+            addDivider(notesCard, false);
             addTextBlock(notesCard, getString(R.string.about_data));
-            addDivider(notesCard);
+            addDivider(notesCard, false);
             addTextBlock(notesCard, getString(R.string.about_license));
         });
     }
@@ -309,17 +311,18 @@ public final class SettingsActivity extends AppCompatActivity {
     private void openPlugins() {
         enterDetail(R.string.page_plugins, parent -> {
             final File[] packages = pluginDirs();
-            addGroupTitle(parent, R.string.section_packages);
+            addGroupTitle(parent, getString(R.string.section_packages) + " · "
+                    + getString(R.string.plugins_count_value, packages.length));
             final LinearLayout card = addCard(parent);
             if (packages.length == 0) {
-                addRow(card, R.drawable.ic_extension, getString(R.string.no_plugins), null, false, null);
+                addRow(card, R.drawable.ic_extension, getString(R.string.no_plugins), null, 0, null);
             }
             for (int i = 0; i < packages.length; i++) {
                 final File dir = packages[i];
                 final String[] info = manifestInfo(dir);
                 final String subtitle = info[2] + (info[1] == null ? "" : " · " + info[1]);
-                addRow(card, R.drawable.ic_extension, info[0], subtitle, true,
-                        v -> copyPath(dir.getAbsolutePath()));
+                addRow(card, R.drawable.ic_extension, info[0], subtitle, R.drawable.ic_copy,
+                        v -> copyPath(dir.getAbsolutePath(), info[0]));
                 if (i != packages.length - 1) addDivider(card);
             }
 
@@ -327,8 +330,8 @@ public final class SettingsActivity extends AppCompatActivity {
             addGroupTitle(parent, R.string.section_chain);
             final LinearLayout chainCard = addCard(parent);
             addRow(chainCard, R.drawable.ic_folder, chain.getName(),
-                    getString(R.string.plugins_chain_desc), true,
-                    v -> copyPath(chain.getAbsolutePath()));
+                    getString(R.string.plugins_chain_desc), R.drawable.ic_copy,
+                    v -> copyPath(chain.getAbsolutePath(), chain.getName()));
 
             addTextBlock(parent, getString(R.string.plugins_note));
         });
@@ -342,17 +345,18 @@ public final class SettingsActivity extends AppCompatActivity {
             final LinearLayout card = addCard(parent);
             addRow(card, R.drawable.ic_folder, getString(R.string.row_plugins),
                     plugins.getAbsolutePath() + "\n" + getString(R.string.storage_plugins_desc),
-                    true, v -> copyPath(plugins.getAbsolutePath()));
+                    R.drawable.ic_copy, v -> copyPath(plugins.getAbsolutePath(), getString(R.string.row_plugins)));
             addDivider(card);
             addRow(card, R.drawable.ic_folder, getString(R.string.section_chain),
                     chains.getAbsolutePath() + "\n" + getString(R.string.storage_chains_desc),
-                    true, v -> copyPath(chains.getAbsolutePath()));
+                    R.drawable.ic_copy, v -> copyPath(chains.getAbsolutePath(), chains.getName()));
 
             addTextBlock(parent, getString(R.string.storage_note));
         });
     }
 
     private void enterDetail(int titleRes, Page page) {
+        TransitionManager.beginDelayedTransition((ViewGroup) findViewById(R.id.root), new Fade());
         detailContent.removeAllViews();
         page.build(detailContent);
         toolbar.setTitle(titleRes);
@@ -370,6 +374,7 @@ public final class SettingsActivity extends AppCompatActivity {
     private void leaveDetail() {
         if (!inDetail) return;
         inDetail = false;
+        TransitionManager.beginDelayedTransition((ViewGroup) findViewById(R.id.root), new Fade());
         detailScroll.setVisibility(View.GONE);
         homeScroll.setVisibility(View.VISIBLE);
         toolbar.setTitle(R.string.home_title);
@@ -441,10 +446,14 @@ public final class SettingsActivity extends AppCompatActivity {
     }
 
     private void addGroupTitle(LinearLayout parent, int titleRes) {
-        final TextView title = text(getString(titleRes), 12, true,
+        addGroupTitle(parent, getString(titleRes));
+    }
+
+    private void addGroupTitle(LinearLayout parent, CharSequence title) {
+        final TextView view = text(title, 12, true,
                 attrColor(com.google.android.material.R.attr.colorPrimary));
-        title.setPadding(dp(24), dp(20), dp(24), dp(8));
-        parent.addView(title);
+        view.setPadding(dp(24), dp(20), dp(24), dp(8));
+        parent.addView(view);
     }
 
     private LinearLayout addCard(LinearLayout parent) {
@@ -473,7 +482,7 @@ public final class SettingsActivity extends AppCompatActivity {
     }
 
     private void addRow(LinearLayout parent, int iconRes, CharSequence title, CharSequence subtitle,
-                        boolean chevron, View.OnClickListener click) {
+                        int trailingIconRes, View.OnClickListener click) {
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -516,9 +525,9 @@ public final class SettingsActivity extends AppCompatActivity {
             lines.addView(sub, subParams);
         }
 
-        if (chevron) {
+        if (trailingIconRes != 0) {
             final ImageView arrow = new ImageView(this);
-            arrow.setImageResource(R.drawable.ic_chevron_right);
+            arrow.setImageResource(trailingIconRes);
             arrow.setImageTintList(ColorStateList.valueOf(
                     attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
             arrow.setContentDescription(null);
@@ -532,11 +541,16 @@ public final class SettingsActivity extends AppCompatActivity {
     }
 
     private void addDivider(LinearLayout parent) {
+        addDivider(parent, true);
+    }
+
+    private void addDivider(LinearLayout parent, boolean indent) {
         final View divider = new View(this);
         divider.setBackgroundColor(attrColor(com.google.android.material.R.attr.colorOutlineVariant));
         final LinearLayout.LayoutParams params =
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
-        params.setMarginStart(dp(56));
+        params.setMarginStart(dp(indent ? 56 : 16));
+        params.setMarginEnd(dp(16));
         parent.addView(divider, params);
     }
 
@@ -560,13 +574,13 @@ public final class SettingsActivity extends AppCompatActivity {
         return (color & 0x00FFFFFF) | (Math.round(alpha * 255) << 24);
     }
 
-    private void copyPath(String path) {
+    private void copyPath(String path, CharSequence label) {
         final ClipboardManager clipboard =
                 (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
             clipboard.setPrimaryClip(ClipData.newPlainText("pime", path));
         }
-        Snackbar.make(findViewById(R.id.root), getString(R.string.copied, path),
+        Snackbar.make(findViewById(R.id.root), getString(R.string.copied, label),
                 Snackbar.LENGTH_SHORT).show();
     }
 

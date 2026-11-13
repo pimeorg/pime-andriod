@@ -120,7 +120,10 @@
                             app:boxCornerRadiusBottomEnd="16dp"
                             app:boxCornerRadiusBottomStart="16dp"
                             app:boxCornerRadiusTopEnd="16dp"
-                            app:boxCornerRadiusTopStart="16dp">
+                            app:boxCornerRadiusTopStart="16dp"
+                            app:endIconMode="clear_text"
+                            app:helperText="@string/hero_test_helper"
+                            app:helperTextTextColor="?attr/colorOnPrimaryContainer">
 
                             <com.google.android.material.textfield.TextInputEditText
                                 android:id="@+id/test_input"

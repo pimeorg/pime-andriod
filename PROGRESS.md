@@ -218,6 +218,12 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   存储位置）进入/返回正常，工具栏返回箭头与系统返回键都可回首页；插件页按
   `manifest.yaml` 显示 `format/preprocess/parse/rank/translate · 1.0.0`，点行
   复制路径并弹出“已复制：…”Snackbar；存储页显示两个目录与重装说明。
+- **设置页 UX 细节（第三轮）**：可复制行右侧改用复制图标（导航行才用箭头），
+  插件页组标题带数量（“插件包 · 5 个”），Snackbar 只报短名
+  （“已复制：pime-candidates-format”）而不是整条路径；试验输入框加
+  clear_text 图标与 “试试 nihao、hbg、zsh” 辅助文字；首页与二级页切换用
+  `Fade` 过渡；关于页说明块的分割线不再按图标缩进。竖屏（900×1600）实测
+  布局正常，无需横屏特判。
 
 ## 对 core 的修改
 
