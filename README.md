@@ -78,6 +78,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 `assets/plugins/` 与 `assets/chains/` 若存在，会在首次启动时复制到上述目录。
+已存在的目录不会覆盖：更新 APK 里的插件包后需要清除应用数据（或手动替换
+`files/plugins/`）才会生效。
 
 ## 运行时约定
 
