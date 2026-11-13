@@ -3,6 +3,7 @@ package dev.pime.ime;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
@@ -21,6 +22,7 @@ import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -32,6 +34,8 @@ import androidx.transition.TransitionManager;
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.snackbar.Snackbar;
 
 import java.io.BufferedReader;
@@ -57,6 +61,8 @@ public final class SettingsActivity extends AppCompatActivity {
     private boolean inDetail;
     private Boolean lastEnabled;
     private Boolean lastCurrent;
+    private Page detailPage;
+    private int detailTitleRes;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -122,6 +128,10 @@ public final class SettingsActivity extends AppCompatActivity {
         addRow(keyboard, R.drawable.ic_keyboard, getString(R.string.row_ime),
                 getString(R.string.row_ime_desc), R.drawable.ic_chevron_right,
                 v -> startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
+        addDivider(keyboard);
+        addRow(keyboard, R.drawable.ic_tune, getString(R.string.row_settings),
+                getString(R.string.row_settings_desc), R.drawable.ic_chevron_right,
+                v -> openSettings());
         addDivider(keyboard);
         addRow(keyboard, R.drawable.ic_extension, getString(R.string.row_plugins),
                 pluginSummary(), R.drawable.ic_chevron_right, v -> openPlugins());
@@ -352,6 +362,133 @@ public final class SettingsActivity extends AppCompatActivity {
         });
     }
 
+    /** Host-only display preferences; nothing here feeds the plugin chain. */
+    private void openSettings() {
+        enterDetail(R.string.page_settings, parent -> {
+            addGroupTitle(parent, R.string.section_feel);
+            final LinearLayout feel = addCard(parent);
+            addRow(feel, R.drawable.ic_keyboard, getString(R.string.row_height),
+                    heightLabel(Prefs.keyboardPercent(this)),
+                    R.drawable.ic_chevron_right, v -> chooseHeight());
+            addDivider(feel);
+            addSwitchRow(feel, R.drawable.ic_tune, getString(R.string.row_vibrate),
+                    getString(R.string.row_vibrate_desc), Prefs.vibrate(this),
+                    (button, checked) -> {
+                        Prefs.setVibrate(this, checked);
+                        if (checked) {
+                            findViewById(R.id.root).performHapticFeedback(
+                                    android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+                        }
+                    });
+            addDivider(feel);
+            addSwitchRow(feel, R.drawable.ic_tune, getString(R.string.row_sound),
+                    getString(R.string.row_sound_desc), Prefs.sound(this),
+                    (button, checked) -> Prefs.setSound(this, checked));
+
+            addGroupTitle(parent, R.string.section_display);
+            final LinearLayout display = addCard(parent);
+            addRow(display, R.drawable.ic_extension, getString(R.string.row_candidates),
+                    candidatesLabel(Prefs.candidates(this)),
+                    R.drawable.ic_chevron_right, v -> chooseCandidates());
+            addDivider(display);
+            addRow(display, R.drawable.ic_info, getString(R.string.row_theme),
+                    themeLabel(Prefs.theme(this)), R.drawable.ic_chevron_right,
+                    v -> chooseTheme());
+
+            addTextBlock(parent, getString(R.string.settings_note));
+        });
+    }
+
+    private CharSequence heightLabel(int percent) {
+        final int name;
+        if (percent < 100) {
+            name = R.string.height_compact;
+        } else if (percent > 100) {
+            name = R.string.height_roomy;
+        } else {
+            name = R.string.height_standard;
+        }
+        return getString(R.string.height_value, getString(name), percent);
+    }
+
+    private CharSequence candidatesLabel(int count) {
+        return count <= 0 ? getString(R.string.candidates_all)
+                : getString(R.string.candidates_value, count);
+    }
+
+    private CharSequence themeLabel(String theme) {
+        switch (theme) {
+            case Prefs.THEME_LIGHT:
+                return getString(R.string.theme_light);
+            case Prefs.THEME_DARK:
+                return getString(R.string.theme_dark);
+            default:
+                return getString(R.string.theme_system);
+        }
+    }
+
+    private void chooseHeight() {
+        final int[] values = Prefs.KEYBOARD_PERCENTS;
+        final CharSequence[] labels = new CharSequence[values.length];
+        for (int i = 0; i < values.length; i++) labels[i] = heightLabel(values[i]);
+        choose(R.string.row_height, labels, indexOf(values, Prefs.keyboardPercent(this)),
+                (dialog, which) -> {
+                    Prefs.setKeyboardPercent(this, values[which]);
+                    dialog.dismiss();
+                    rebuildDetail();
+                });
+    }
+
+    private void chooseCandidates() {
+        final int[] values = Prefs.CANDIDATE_COUNTS;
+        final CharSequence[] labels = new CharSequence[values.length];
+        for (int i = 0; i < values.length; i++) labels[i] = candidatesLabel(values[i]);
+        choose(R.string.row_candidates, labels, indexOf(values, Prefs.candidates(this)),
+                (dialog, which) -> {
+                    Prefs.setCandidates(this, values[which]);
+                    dialog.dismiss();
+                    rebuildDetail();
+                });
+    }
+
+    private void chooseTheme() {
+        final String[] values = {
+                Prefs.THEME_SYSTEM, Prefs.THEME_LIGHT, Prefs.THEME_DARK
+        };
+        final CharSequence[] labels = {
+                getString(R.string.theme_system), getString(R.string.theme_light),
+                getString(R.string.theme_dark)
+        };
+        int selected = 0;
+        final String current = Prefs.theme(this);
+        for (int i = 0; i < values.length; i++) {
+            if (values[i].equals(current)) selected = i;
+        }
+        choose(R.string.row_theme, labels, selected, (dialog, which) -> {
+            Prefs.setTheme(this, values[which]);
+            dialog.dismiss();
+            // Recreates the activity (and any open input view) with the new
+            // night mode, so there is nothing left to rebuild here.
+            AppCompatDelegate.setDefaultNightMode(Prefs.nightMode(this));
+        });
+    }
+
+    private void choose(int titleRes, CharSequence[] labels, int selected,
+                        DialogInterface.OnClickListener onPick) {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(titleRes)
+                .setSingleChoiceItems(labels, selected, onPick)
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private static int indexOf(int[] values, int value) {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == value) return i;
+        }
+        return 0;
+    }
+
     private void openStorage() {
         enterDetail(R.string.page_storage, parent -> {
             final File plugins = new File(getFilesDir(), "plugins");
@@ -371,6 +508,8 @@ public final class SettingsActivity extends AppCompatActivity {
     }
 
     private void enterDetail(int titleRes, Page page) {
+        detailPage = page;
+        detailTitleRes = titleRes;
         TransitionManager.beginDelayedTransition((ViewGroup) findViewById(R.id.root), new Fade());
         detailContent.removeAllViews();
         page.build(detailContent);
@@ -386,9 +525,17 @@ public final class SettingsActivity extends AppCompatActivity {
         inDetail = true;
     }
 
+    /** Rebuilds the open detail page so it shows freshly changed preferences. */
+    private void rebuildDetail() {
+        if (!inDetail || detailPage == null) return;
+        detailContent.removeAllViews();
+        detailPage.build(detailContent);
+    }
+
     private void leaveDetail() {
         if (!inDetail) return;
         inDetail = false;
+        detailPage = null;
         TransitionManager.beginDelayedTransition((ViewGroup) findViewById(R.id.root), new Fade());
         detailScroll.setVisibility(View.GONE);
         homeScroll.setVisibility(View.VISIBLE);
@@ -551,6 +698,60 @@ public final class SettingsActivity extends AppCompatActivity {
             arrowParams.setMarginStart(dp(8));
             row.addView(arrow, arrowParams);
         }
+
+        parent.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void addSwitchRow(LinearLayout parent, int iconRes, CharSequence title,
+                              CharSequence subtitle, boolean checked,
+                              android.widget.CompoundButton.OnCheckedChangeListener listener) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(72));
+        row.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        final MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setChecked(checked);
+        toggle.setContentDescription(title);
+        toggle.setOnCheckedChangeListener(listener);
+        // Tapping anywhere on the row flips the switch.
+        row.setOnClickListener(v -> toggle.toggle());
+        row.setFocusable(true);
+        final TypedValue rowRipple = new TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, rowRipple, true);
+        row.setBackgroundResource(rowRipple.resourceId);
+
+        final ImageView icon = new ImageView(this);
+        icon.setImageResource(iconRes);
+        icon.setImageTintList(ColorStateList.valueOf(
+                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+        row.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+
+        final LinearLayout lines = new LinearLayout(this);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout.LayoutParams lineParams =
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lineParams.setMarginStart(dp(16));
+        row.addView(lines, lineParams);
+
+        lines.addView(text(title, 16, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurface)));
+        if (subtitle != null) {
+            final TextView sub = text(subtitle, 14, false,
+                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
+            sub.setMaxLines(2);
+            final LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            subParams.topMargin = dp(2);
+            lines.addView(sub, subParams);
+        }
+
+        final LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        toggleParams.setMarginStart(dp(8));
+        row.addView(toggle, toggleParams);
 
         parent.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));

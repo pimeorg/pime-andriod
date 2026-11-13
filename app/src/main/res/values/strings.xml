@@ -27,6 +27,8 @@
     <string name="group_keyboard">键盘</string>
     <string name="row_ime">输入法设置</string>
     <string name="row_ime_desc">启用、切换与系统输入设置</string>
+    <string name="row_settings">键盘与候选</string>
+    <string name="row_settings_desc">高度、按键反馈、候选数量与主题</string>
     <string name="row_plugins">插件与链</string>
     <string name="row_storage">存储位置</string>
 
@@ -69,4 +71,28 @@
     <string name="snack_disabled">已停用 PIME 输入法</string>
     <string name="snack_default">已切换为默认输入法</string>
     <string name="role_unknown">未知角色</string>
+
+    <string name="page_settings">键盘与候选</string>
+    <string name="section_feel">手感</string>
+    <string name="section_display">显示</string>
+    <string name="row_height">键盘高度</string>
+    <string name="row_height_desc">键盘占用的屏幕高度</string>
+    <string name="row_vibrate">按键振动</string>
+    <string name="row_vibrate_desc">按下按键时轻微震动</string>
+    <string name="row_sound">按键音</string>
+    <string name="row_sound_desc">按下按键时播放系统点击音</string>
+    <string name="row_candidates">候选数量</string>
+    <string name="row_candidates_desc">候选栏最多显示几个候选</string>
+    <string name="row_theme">主题</string>
+    <string name="row_theme_desc">跟随系统，或固定浅色 / 深色</string>
+    <string name="height_compact">紧凑</string>
+    <string name="height_standard">标准</string>
+    <string name="height_roomy">宽松</string>
+    <string name="height_value">%1$s（%2$d%%）</string>
+    <string name="candidates_all">全部</string>
+    <string name="candidates_value">%1$d 个</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏与主题），不改变分词、词典与候选排序——那些由插件链决定。</string>
 </resources>

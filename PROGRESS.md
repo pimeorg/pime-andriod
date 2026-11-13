@@ -82,7 +82,7 @@ Components 的原生 View，保持 `SettingsActivity` 单文件、无状态层�
 - 未就绪时品牌卡内是 WeaveText 式的两步引导：编号圆圈（完成变绿勾、当前步
   为主题色）、标题/说明、当前步的按钮，以及“本机处理、不联网”的隐私说明。
   已就绪时引导整块隐藏，只留试验输入框。
-- “键盘”组：输入法设置（系统页）、插件与链、存储位置。
+- “键盘”组：输入法设置（系统页）、键盘与候选、插件与链、存储位置。
 - “关于”组：关于 PIME、输入内核。
 - 二级页：插件与链、存储位置、关于都是独立页面（工具栏返回箭头 + 系统返回键
   接管），不是对话框。插件页读各包 `manifest.yaml` 的 id/role/version 展示，
@@ -96,6 +96,29 @@ Components 的原生 View，保持 `SettingsActivity` 单文件、无状态层�
   targetSdk 36 的 edge-to-edge 把标题压到状态栏下。
 - 明暗两套 Material 3 配色（取自 WeaveText 的蓝色方案）；启动图标使用
   `E:/work/pime` 的蓝色 PIME 标志，裁切出透明前景并生成自适应图标。
+
+### 宿主显示设置
+
+在 MuMu 12（Android 15 / x86_64）上验收 Material 3 设置页时，用户提出“设置里
+要能改东西”：设置页不能只是只读信息，需要有真实可配置项。约束是这些配置只能
+属于宿主视图层，不能触碰插件业务。
+
+- 新增 `Prefs`（`SharedPreferences` 文件 `pime`）集中存放宿主偏好，`PimeApplication`
+  在 `onCreate` 里按偏好设置 `AppCompatDelegate` 夜间模式，保证首个界面就是正确
+  主题。
+- “键盘与候选”二级页分两组：手感（键盘高度 88/100/115%、按键振动、按键音）、
+  显示（候选数量 全部/3/5/7/9、主题 跟随系统/浅色/深色）。前三项就地生效——
+  键盘高度在 `onCreateInputView` 按百分比缩放并同步 `minimumHeight`，振动/按键音
+  在 `KeyboardView.fire()` 里判断（按键音走 `AudioManager.playSoundEffect`）。
+- 候选数量在 `PimeImeService.onCandidates` 里截断显示条数，`selectCandidate` 仍用
+  原始下标，因此截断只影响可见候选，不影响插件链给出的候选序号。
+- 单选对话框用 `MaterialAlertDialogBuilder.setSingleChoiceItems`；改完偏好后
+  `rebuildDetail()` 重建当前二级页（`Page` 在构建时读偏好），所以行副标题立即
+  反映新值。主题这类需要整页重建的项交给 `AppCompatDelegate.setDefaultNightMode`，
+  由系统重建 Activity。
+- 开关行是自绘的 `addSwitchRow`（图标 + 标题/副标题 + `MaterialSwitch`），点击
+  整行与点击开关等价。
+
 
 ### 缓冲与文本
 
@@ -228,6 +251,16 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   Snackbar（“已启用 PIME 输入法”“已停用 PIME 输入法”“已切换为默认输入法”）；
   实测停用后返回显示“已停用 PIME 输入法”，状态胶囊与引导同步切换。复制图标
   补 `contentDescription`，方向性图标 `autoMirrored` 以支持 RTL。
+- **宿主显示设置实测（2026-11-13 第五轮）**：首页新增“键盘与候选”入口（`ic_tune`
+  图标）。依次改键盘高度为“宽松（115%）”、候选数量为 5、再改为 3、主题为“深色”，
+  每次 `run-as … cat shared_prefs/pime.xml` 都看到对应键落盘
+  （`keyboard_percent=115` / `candidates=3` / `theme=dark`），二级页行副标题同步
+  刷新（“标准（100%）”→“宽松（115%）”），改主题后 Activity 立即以深色重建。
+  切换 PIME 为当前输入法后：键盘明显变高（115%），同一段简拼输入在“候选数量=3”
+  下候选栏只有 3 个（就能/技能/今年），改回“全部”后同一输入出现 5 个以上
+  （就能就/就那就/技能就/今年就/就你就…），确认截断只作用于宿主显示条数。
+  验证完把偏好文件删除（`run-as … rm shared_prefs/pime.xml`）恢复默认值，
+  并把默认输入法还原为 Sogou、PIME 保持启用。
 
 ## 对 core 的修改
 

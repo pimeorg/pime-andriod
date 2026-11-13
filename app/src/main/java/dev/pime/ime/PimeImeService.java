@@ -126,12 +126,14 @@ public final class PimeImeService extends InputMethodService
         root.addView(candidateScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
 
+        final int keyboardHeight =
+                dp(224 * Prefs.keyboardPercent(this) / 100);
         keyboard = new KeyboardView(this);
         keyboard.setListener(this);
         root.addView(keyboard, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(224)));
+                ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
 
-        root.setMinimumHeight(dp(306));
+        root.setMinimumHeight(dp(38) + dp(44) + keyboardHeight);
         return root;
     }
 
@@ -281,7 +283,9 @@ public final class PimeImeService extends InputMethodService
         final TypedValue ripple = new TypedValue();
         getTheme().resolveAttribute(android.R.attr.selectableItemBackground,
                 ripple, true);
-        for (int i = 0; i < items.length; ++i) {
+        final int limit = Prefs.candidates(this);
+        final int count = limit > 0 ? Math.min(limit, items.length) : items.length;
+        for (int i = 0; i < count; ++i) {
             final TextView item = new TextView(this);
             item.setText(items[i]);
             item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);

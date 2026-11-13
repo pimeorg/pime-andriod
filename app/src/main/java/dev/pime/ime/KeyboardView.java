@@ -4,11 +4,13 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
+import android.view.SoundEffectConstants;
 import android.view.View;
 
 import java.util.ArrayList;
@@ -247,7 +249,15 @@ public final class KeyboardView extends View {
             invalidate();
             return;
         }
-        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        final Context context = getContext();
+        if (Prefs.vibrate(context)) {
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        }
+        if (Prefs.sound(context)) {
+            final AudioManager audio =
+                    (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+            if (audio != null) audio.playSoundEffect(SoundEffectConstants.CLICK);
+        }
         if (listener != null) listener.onKey(key);
         if (shift && key.isLetter()) {
             shift = false;
