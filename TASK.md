@@ -23,5 +23,8 @@
 - [x] 实测修复：候选提交后组合状态复位（parse 提交阶段保留 workspace、清空 state）
 - [x] 实测修复：空组合退格回传编辑器（keymap 不再吞键、`deleteSurroundingText`）
 - [x] 实测修复：结束组合用 `setComposingText("", 1)`，避免残留组合串
+- [x] 同步增强后的拼音插件（20k 词表、简拼/整句）并重建 APK
+- [x] MuMu 实测简拼与整句：`ws` → 首位“我是”并提交成功；`woshi` → 我是；
+      `nh` → 你好
 - [ ] arm64 物理设备验证
 - [ ] release 签名与图标
