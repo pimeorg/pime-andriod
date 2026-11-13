@@ -143,6 +143,11 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   `ws`，候选为 `我是 / 我说 / 晚上 / 为啥 / 无数`；点击首位后搜索框提交
   `我是`。随后验证 `woshi` → 首位 `我是`、`nh` → 首位 `你好`。首次按键加载
   20k 词表时 logcat 无 `failed to link import function` 警告。
+- **三字母简拼实测（2026-11-13 第二轮）**：translate 改为原始字母网格后，
+  MuMu 12 上输入 `hbg`，组合串为 `hbg`，候选栏为
+  `还不够 / 和不过 / 好不过 / 和不够 / 好不够`；点击首位后搜索框提交
+  `还不够`。这同时验证了 Android 侧加载的是新 wasm（`pm clear` 后插件包
+  从 assets 重新复制）。
 
 ## 对 core 的修改
 
@@ -159,4 +164,8 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   JNI、WAMR 执行与 InputConnection 路径，但未覆盖 arm64 真机与厂商 ROM 差异。
 - 只有 debug 签名；未配置 release 签名、混淆、图标。
 - 链选择固定 `default.cbor`；未做多链/插件管理 UI。
+- 插件包只在首次启动时从 `assets/` 复制到 `files/plugins/`；`adb install -r`
+  保留应用数据，因此重装 APK 不会更新插件。实测新插件需先
+  `adb shell pm clear dev.pime.ime`（会清空设置），或提升插件版本号让目录名
+  变化。
 - 未使用 `pime_core_touch`（手写输入 UI 未实现）。
