@@ -386,6 +386,18 @@ Java_dev_pime_ime_PimeCore_nativePluginLoad(JNIEnv* env, jobject, jlong core,
         pime_plugin_load(instance, value.data(), static_cast<uint32_t>(value.size())));
 }
 
+JNIEXPORT jint JNICALL
+Java_dev_pime_ime_PimeCore_nativePermission(JNIEnv* env, jobject, jlong core,
+                                            jstring capability,
+                                            jboolean granted) {
+    pime_core* instance = core_of(core);
+    if (!instance) return PIME_INVALID;
+    const std::string value = from_jstring(env, capability);
+    return static_cast<jint>(pime_core_permission(
+        instance, value.data(), static_cast<uint32_t>(value.size()),
+        granted ? 1 : 0));
+}
+
 JNIEXPORT jlong JNICALL
 Java_dev_pime_ime_PimeCore_nativeBuildGeneration(JNIEnv* env, jobject, jlong core,
                                                  jbyteArray config) {

@@ -12,6 +12,9 @@
 NDK 28.2.13676358、CMake 3.31.6）；Gradle 8.14.5（缓存分发 + wrapper）；AGP
 8.13.2。无 adb 设备、无 AVD。
 
+后续继续要求：把 WASM 插件链真正跑起来并打进 APK（不是只留加载路径），因此本阶段
+集成了 WAMR、同步了插件包，并在 Windows 宿主上用同一份 core 验证了整条链。
+
 ## 已完成
 
 | 内容 | 位置 |
@@ -26,6 +29,9 @@ NDK 28.2.13676358、CMake 3.31.6）；Gradle 8.14.5（缓存分发 + wrapper）�
 | 软键盘（字母/数字/Shift/退格/空格/回车/标点） | `KeyboardView.java` |
 | 未处理按键回传编辑器（零插件可用） | `PimeImeService.java` |
 | NDK 静态链接 core，`libpime_jni.so` 双 ABI | `app/src/main/cpp/CMakeLists.txt` |
+| WAMR 2.4.1 静态链入（fast interpreter） | `app/src/main/cpp/CMakeLists.txt`、`third_party/wamr` |
+| 五个第一方 WASM 插件包与默认链随包发布 | `app/src/main/assets/plugins/`、`assets/chains/default.cbor` |
+| 宿主能力授权（`pime_core_permission`） | `pime_jni.cpp`、`PimeCore.java`、`PimeImeService.java` |
 | debug APK 产出 | `app/build/outputs/apk/debug/app-debug.apk` |
 | 宿主 smoke test | 临时工程（非仓库内），见下 |
 
@@ -61,13 +67,36 @@ JNI 每次按键构造 `pime_key_event`，文本以 UTF-8 传入；sink 文本�
 UTF-16 交给 Java。组合串游标按“字节前缀 → UTF-16 单元数”换算后再 +1 传给
 `setComposingText`。
 
+### WASM 运行时与能力
+
+core 的 WASM 适配层用 WAMR 2.4.1，Android 构建开启快速解释器（`WAMR_BUILD_FAST_INTERP`），
+与 Windows 宿主保持一致；AOT/HIT 不启用。插件模块由 `pime-public-plugin` 的
+wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `env` 导入，由 core
+用 `wasm_runtime_register_natives` 提供（包括资产、时钟、发射等）。
+
+插件声明的能力不能默认可用：宿主在 `loadPlugin` 之前逐个调用
+`pime_core_permission` 授权内置链用到的 `input.read`、`workspace`、`output.emit`、
+`asset.read`。缺任一项时插件在使用处得到 `PIME_DENIED`（例如 translate 的词典
+打不开，表现为 `NOT_FOUND`），因此授权是链能出词的前提。
+
+### 包布局
+
+`assets/plugins/<id>/` 与 `assets/chains/default.cbor` 首次启动复制到 `files/`。
+链中的五个 id 与目录名一一对应：keymap-default（preprocess）、pinyin-parse
+（parse）、pinyin-translate（translate，带 `assets/pinyin.dict`）、pinyin-rank
+（rank）、candidates-format（format）。
+
 ## 验证
 
 - `./gradlew assembleDebug` 成功；APK 含 `lib/arm64-v8a/libpime_jni.so` 与
-  `lib/x86_64/libpime_jni.so`；`aapt2 dump badging` 显示 `provides-component:'ime'`。
-- Windows 宿主 smoke test（链接同一份 core）：空链代 `build: OK`、`activate: OK`、
-  会话创建成功；字母/空格/退格/回车均 `handled=0`，sink 无输出——与 Java 层的
-  passthrough 设计一致。
+  `lib/x86_64/libpime_jni.so`，以及 `assets/plugins/` 五个包和 `assets/chains/default.cbor`；
+  `llvm-nm` 可见 WAMR 符号与 `nativePermission` 导出。
+- Windows 宿主 smoke test（同一份 core + WAMR，快速解释器）：空链代
+  `build: OK`、`activate: OK`、按键 unhandled；完整链下五个包 `load: OK`，
+  `build/activate: OK`，连打 `nihao` 组合串逐键推进，候选 `[0]你 [1]你好 …`，
+  选择 0 后提交 `你好`。
+- 同一次 smoke 也验证了能力模型：未授权 `asset.read` 时 translate 打不开词典；
+  授权后正常出词。
 
 ## 对 core 的修改
 
@@ -79,9 +108,10 @@ UTF-16 交给 Java。组合串游标按“字节前缀 → UTF-16 单元数”�
 
 ## 待完成 / 已知限制
 
-- 未启用 WAMR（`PIME_BUILD_WASM`）与 Lua（`PIME_BUILD_LUA`）：现有 WASM/Lua 插件包
-  不能在 APK 内执行。加载路径已就绪，补运行时后无需改 Java。
-- 未在真机/模拟器运行（无设备）；JNI 回调与 UI 只做了编译期与 core 侧验证。
+- Lua（`PIME_BUILD_LUA`）未启用：Lua 插件包仍不能在 APK 内执行；WASM 已经可用。
+- 未在真机/模拟器运行（无 adb 设备、无 AVD）；JNI 回调与 UI 只做了编译期与
+  Windows 宿主验证。宿主验证覆盖 core + 插件链，不覆盖 Android UI 线程与
+  `InputConnection` 行为。
 - 只有 debug 签名；未配置 release 签名、混淆、图标。
 - 链选择固定 `default.cbor`；未做多链/插件管理 UI。
 - 未使用 `pime_core_touch`（手写输入 UI 未实现）。

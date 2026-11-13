@@ -99,6 +99,16 @@ public final class PimeCore {
     }
 
     /**
+     * Host policy: grants or revokes a capability before plugins are loaded.
+     * Capabilities a plugin declares but the host does not grant fail closed
+     * with PIME_DENIED once the plugin uses them.
+     */
+    public int permission(String capability, boolean granted) {
+        if (core == 0 || capability == null) return -1;
+        return nativePermission(core, capability, granted);
+    }
+
+    /**
      * Builds and activates a generation from chain CBOR. A generation with an
      * empty plugin list is valid; it simply leaves every key unhandled.
      */
@@ -214,6 +224,9 @@ public final class PimeCore {
     private native void nativeStop(long core);
 
     private native int nativePluginLoad(long core, String packageDir);
+
+    private native int nativePermission(long core, String capability,
+                                        boolean granted);
 
     private native long nativeBuildGeneration(long core, byte[] config);
 

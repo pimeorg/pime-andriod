@@ -98,14 +98,16 @@ public final class KeyboardView extends View {
         List<Key> third = new ArrayList<>();
         third.add(new Key("⇧", 0, 1.5f, KIND_SHIFT));
         third.addAll(chars("zxcvbnm"));
-        third.add(new Key("⌫", PimeCore.KEY_BACKSPACE, 1.5f, KIND_BACKSPACE));
+        // Plugin keymaps match ASCII control codes (BS/CR), not the HAL's
+        // 0x01000000 special range, so send the legacy values.
+        third.add(new Key("⌫", 8, 1.5f, KIND_BACKSPACE));
         rows.add(third);
 
         List<Key> bottom = new ArrayList<>();
         bottom.add(new Key(",", ',', 1.2f, KIND_CHAR));
         bottom.add(new Key("空格", ' ', 5f, KIND_SPACE));
         bottom.add(new Key(".", '.', 1.2f, KIND_CHAR));
-        bottom.add(new Key("回车", PimeCore.KEY_ENTER, 1.6f, KIND_ENTER));
+        bottom.add(new Key("回车", 13, 1.6f, KIND_ENTER));
         rows.add(bottom);
     }
 

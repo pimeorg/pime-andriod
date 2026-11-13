@@ -40,6 +40,11 @@ public final class PimeImeService extends InputMethodService
             (byte) 0xA1, 0x67, 'p', 'l', 'u', 'g', 'i', 'n', 's', (byte) 0x80
     };
 
+    /** Union of the capabilities declared by the bundled chain plugins. */
+    private static final String[] CHAIN_CAPABILITIES = {
+            "input.read", "workspace", "output.emit", "asset.read"
+    };
+
     private PimeCore core;
     private boolean coreReady;
     private KeyboardView keyboard;
@@ -78,6 +83,7 @@ public final class PimeImeService extends InputMethodService
         }
         Log.i(TAG, "pime-core " + core.version());
 
+        grantChainCapabilities();
         loadPlugins(pluginDir);
 
         final byte[] config = readBytes(new File(chainDir, "default.cbor"));
@@ -315,6 +321,17 @@ public final class PimeImeService extends InputMethodService
     }
 
     /* host setup */
+
+    /**
+     * Grants the capabilities the bundled first-party chain declares. The core
+     * fails closed: a declared but ungranted capability makes the plugin see
+     * PIME_DENIED on use (the translate plugin's dictionary would not load).
+     */
+    private void grantChainCapabilities() {
+        for (String capability : CHAIN_CAPABILITIES) {
+            report(core.permission(capability, true), "grant " + capability);
+        }
+    }
 
     private void loadPlugins(File pluginDir) {
         final File[] entries = pluginDir.listFiles();

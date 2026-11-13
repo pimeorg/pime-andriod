@@ -21,8 +21,12 @@ pime-android/
 │   ├── KeyboardView.java                 软键盘视图（只上报按键）
 │   └── SettingsActivity.java             启用/切换输入法
 ├── app/src/main/cpp/
-│   ├── CMakeLists.txt                    add_subdirectory(pime-core) + pime_jni
+│   ├── CMakeLists.txt                    add_subdirectory(pime-core) + vmlib + pime_jni
 │   └── pime_jni.cpp                      C ABI ↔ JNI，无输入逻辑
+├── app/src/main/assets/
+│   ├── plugins/                          随包发布的 WASM 插件包（五个）
+│   └── chains/default.cbor               默认链
+├── third_party/wamr/                     WAMR 2.4.1 源码（core 的 WASM 后端）
 ├── TASK.md / PROGRESS.md
 └── gradlew / gradlew.bat
 ```
@@ -39,6 +43,7 @@ pime-android/
 | CMake | 3.31.6（SDK 组件） |
 | Gradle | 8.14.5（wrapper） |
 | AGP | 8.13.2 |
+| WAMR | 2.4.1（`third_party/wamr`，fast interpreter） |
 | pime-core | `../pime-core`（默认） |
 
 ```bash
@@ -77,6 +82,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ## 运行时约定
 
 - core 以 `PIME_FLAG_ALLOW_INSECURE` 启动：未签名插件包可加载，签名校验仍按 core 规则执行。
+- 启动后在加载插件前授予内置链声明的能力（`input.read`、`workspace`、`output.emit`、
+  `asset.read`）。core 失败关闭：声明但未授权的能力在使用时返回 `PIME_DENIED`。
+- WASM 后端为 WAMR 快速解释器（`WAMR_BUILD_FAST_INTERP=1`）；插件模块由 NDK clang
+  + wasm-ld 以 freestanding 方式构建，未定义符号作为 `env` 导入由 core 提供。
 - 空链（`{"plugins": []}`）合法：所有按键返回 unhandled，由 Java 层交给编辑器。
 - `onStartInput` 设置上下文（app_id、field_type、locale=zh_CN、page_size=20、
   `CANDIDATES|TOUCH|SECURE`），密码框同时置 secure。
@@ -84,12 +93,13 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 已知限制
 
-- 本构建未启用 WASM/Lua 运行时（core 的 `PIME_BUILD_WASM` / `PIME_BUILD_LUA` 需要
-  WAMR 与 Lua 5.4），因此现有插件包（WASM/Lua）不能在本 APK 内执行。外壳与加载
-  路径已就绪，补齐运行时后即可直接加载。
+- Lua 运行时未启用（`PIME_BUILD_LUA=OFF`）：Lua 插件包不能在本 APK 内执行；
+  WASM 插件包已可执行。
+- 随包只内置五个第一方 WASM 包（keymap-default、pinyin-parse、pinyin-translate、
+  pinyin-rank、candidates-format）与一条默认链。
 - 只有 debug 签名；release 签名与混淆未配置。
-- 未在真机/模拟器上验证（本机无 adb 设备、无 AVD）；已用 Windows 宿主 smoke test
-  验证 core 的空链代、会话与按键返回路径。
+- 未在真机/模拟器上验证（本机无 adb 设备、无 AVD）；已在 Windows 宿主上以同一份
+  core + WAMR 跑通五包加载、链激活与 `nihao → 你好`。
 - 软键盘布局为首批最小集（字母、数字、Shift、退格、空格、回车、逗号、句点）。
 
 ## 对 pime-core 的改动

@@ -13,3 +13,9 @@
 - [x] 修复 `platform_posix.cpp` 在 Android API < 28 下 `getrandom` 不可声明的问题
 - [x] 生成 debug APK
 - [x] Windows 宿主 smoke test：空链代 build/activate、会话、按键返回 unhandled
+- [x] 集成 WAMR 2.4.1（fast interpreter）作为 core 的 WASM 后端，静态链入 `libpime_jni.so`
+- [x] 同步重建后的五个第一方插件包与 `default.cbor` 到 `assets/`
+- [x] JNI/Java 增加能力授权接口（`pime_core_permission`），启动时授予内置链声明的能力
+- [x] 宿主 smoke test：五包加载、链 build/activate、`nihao` → 候选 → 提交 `你好`
+- [ ] 真机/模拟器验证（本机无 adb 设备、无 AVD）
+- [ ] release 签名与图标
