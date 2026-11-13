@@ -28,7 +28,9 @@
       `nh` → 你好
 - [x] 同步原始字母网格版 translate（`hbg` → 还不够）并重建 APK
 - [x] MuMu 实测三字母简拼：`hbg` 候选首位“还不够”，点击后提交成功
-- [x] 同步 20,066 条词表与 `kWordBonus=9000` 的 translate 包，重建 APK
+- [x] 同步 20,069 条词表与 `kWordBonus=9000` 的 translate 包，重建 APK
+- [x] MuMu 复测歧义覆盖：`zsh` → 早上好、`gz` → 广州、`sz` → 深圳、
+      `yiqichifanba` → 一起吃饭吧、`wozaijia` → 我在家，首位均正确
 - [x] MuMu 多场景实测：`hbg`、`wanan`、`shengrikuaile`、`tiananmen`、
       `nvhai`、`lvse`、`srkl`、`nhm`、`zgm`、`dhrs`、`nh`、`dd`、`wsm`、
       `xian` 共 13 组，候选首位全部符合预期
