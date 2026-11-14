@@ -125,11 +125,15 @@ public final class PimeImeService extends InputMethodService
         root.setGravity(Gravity.BOTTOM);
         root.setBackgroundColor(palette.board);
 
-        /* Top bar: the composition string, then the two host actions. */
+        /* Top bar: settings on the left, the composition string filling the
+         * middle, and the collapse key on the right. */
         final LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setBackgroundColor(palette.bar);
+
+        topBar.addView(iconButton(R.drawable.ic_settings, palette,
+                R.string.ime_action_settings, v -> openSettings()));
 
         compositionView = new TextView(this);
         compositionView.setTextColor(palette.onBar);
@@ -138,12 +142,10 @@ public final class PimeImeService extends InputMethodService
         compositionView.setGravity(Gravity.CENTER_VERTICAL);
         compositionView.setSingleLine(true);
         compositionView.setEllipsize(TextUtils.TruncateAt.START);
-        compositionView.setPadding(dp(16), 0, dp(8), 0);
+        compositionView.setPadding(dp(8), 0, dp(8), 0);
         topBar.addView(compositionView, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        topBar.addView(iconButton(R.drawable.ic_settings, palette,
-                R.string.ime_action_settings, v -> openSettings()));
         topBar.addView(iconButton(R.drawable.ic_expand_more, palette,
                 R.string.ime_action_hide, v -> requestHideSelf(0)));
         root.addView(topBar, new LinearLayout.LayoutParams(
