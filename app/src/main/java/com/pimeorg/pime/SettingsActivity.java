@@ -9,6 +9,7 @@ import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.net.Uri;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -21,9 +22,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -40,11 +44,14 @@ import com.google.android.material.snackbar.Snackbar;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 /** Launcher entry: enable the IME, pick it, and show where plugins live. */
 public final class SettingsActivity extends AppCompatActivity {
@@ -91,6 +98,11 @@ public final class SettingsActivity extends AppCompatActivity {
         testInput.setOnFocusChangeListener((view, hasFocus) -> {
             if (hasFocus) showKeyboard(view);
         });
+
+        importChainLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(), result -> {
+                    if (result != null) importChain(result);
+                });
 
         // Wide screens (tablets, landscape) keep a 640dp reading column, matching
         // the reference settings app.
@@ -388,31 +400,217 @@ public final class SettingsActivity extends AppCompatActivity {
 
     private void openPlugins() {
         enterDetail(R.string.page_plugins, parent -> {
-            final File[] packages = pluginDirs();
-            addGroupTitle(parent, getString(R.string.section_packages) + " · "
-                    + getString(R.string.plugins_count_value, packages.length));
-            final LinearLayout card = addCard(parent);
-            if (packages.length == 0) {
-                addRow(card, R.drawable.ic_extension, getString(R.string.no_plugins), null, 0, null);
+            try {
+                buildPluginsPage(parent);
+            } catch (IOException error) {
+                addTextBlock(parent, getString(R.string.plugin_setting_missing));
             }
-            for (int i = 0; i < packages.length; i++) {
-                final File dir = packages[i];
-                final String[] info = manifestInfo(dir);
-                final String subtitle = info[2] + (info[1] == null ? "" : " · " + info[1]);
-                addRow(card, R.drawable.ic_extension, info[0], subtitle, R.drawable.ic_copy,
-                        v -> copyPath(dir.getAbsolutePath(), info[0]));
-                if (i != packages.length - 1) addDivider(card);
-            }
-
-            final File chain = new File(getFilesDir(), "chains/default.cbor");
-            addGroupTitle(parent, R.string.section_chain);
-            final LinearLayout chainCard = addCard(parent);
-            addRow(chainCard, R.drawable.ic_folder, chain.getName(),
-                    getString(R.string.plugins_chain_desc), R.drawable.ic_copy,
-                    v -> copyPath(chain.getAbsolutePath(), chain.getName()));
-
-            addTextBlock(parent, getString(R.string.plugins_note));
         });
+    }
+
+    /** Builds the full chain + plugin management page for the active chain. */
+    private void buildPluginsPage(LinearLayout parent) throws IOException {
+        final String activeName = ChainStore.activeChainName(this);
+        final File active = ChainStore.activeChain(this);
+
+        /* --- chain plans --- */
+        addGroupTitle(parent, R.string.section_chains);
+        final LinearLayout chainCard = addCard(parent);
+        final List<File> chains = ChainStore.listChains(this);
+        if (chains.isEmpty()) {
+            addRow(chainCard, R.drawable.ic_folder, getString(R.string.chain_name_empty),
+                    null, 0, null);
+        }
+        for (int i = 0; i < chains.size(); i++) {
+            final File chain = chains.get(i);
+            final boolean isActive = chain.getName().equals(activeName);
+            final String subtitle = isActive
+                    ? getString(R.string.chain_active) : getString(R.string.plugins_chain_desc);
+            addRow(chainCard, R.drawable.ic_folder, chain.getName(), subtitle, 0,
+                    v -> switchChain(chain));
+            if (i != chains.size() - 1) addDivider(chainCard);
+        }
+        addRow(chainCard, R.drawable.ic_extension, getString(R.string.action_new_chain),
+                null, R.drawable.ic_chevron_right, v -> newChainDialog());
+        addDivider(chainCard);
+        addRow(chainCard, R.drawable.ic_folder, getString(R.string.action_import_chain),
+                null, R.drawable.ic_chevron_right,
+                v -> importChainLauncher.launch(new String[]{"*/*"}));
+
+        /* --- active chain plugins --- */
+        final List<ChainStore.PluginEntry> plugins = ChainStore.readChain(this, active);
+        addGroupTitle(parent, getString(R.string.section_chain_plugins) + " · "
+                + getString(R.string.plugins_count_value, plugins.size()));
+        final LinearLayout pluginCard = addCard(parent);
+        if (plugins.isEmpty()) {
+            addRow(pluginCard, R.drawable.ic_extension, getString(R.string.no_plugins), null, 0, null);
+        }
+        for (int i = 0; i < plugins.size(); i++) {
+            final ChainStore.PluginEntry entry = plugins.get(i);
+            final String subtitle = entry.role + (entry.version.isEmpty()
+                    ? "" : " · " + entry.version);
+            addSwitchRow(pluginCard, R.drawable.ic_extension, entry.id, subtitle, true,
+                    (button, checked) -> togglePlugin(active, entry, checked));
+            if (i != plugins.size() - 1) addDivider(pluginCard);
+        }
+
+        /* --- per-plugin settings --- */
+        final List<ChainStore.PluginEntry> withSettings = new ArrayList<>();
+        for (ChainStore.PluginEntry entry : plugins) {
+            if (!entry.settings.isEmpty()) withSettings.add(entry);
+        }
+        if (!withSettings.isEmpty()) {
+            addGroupTitle(parent, R.string.section_plugin_settings);
+            for (ChainStore.PluginEntry entry : withSettings) {
+                final LinearLayout settingsCard = addCard(parent);
+                for (Map.Entry<String, Object> setting : entry.settings.entrySet()) {
+                    addSettingRow(settingsCard, active, entry, setting.getKey(),
+                            setting.getValue());
+                    addDivider(settingsCard);
+                }
+            }
+        }
+
+        addTextBlock(parent, getString(R.string.plugins_note));
+    }
+
+    private void switchChain(File chain) {
+        ChainStore.setActiveChain(this, chain.getName());
+        broadcastRebuild();
+        snack(getString(R.string.chain_switched, chain.getName()));
+        rebuildDetail();
+    }
+
+    private void togglePlugin(File chain, ChainStore.PluginEntry entry, boolean enabled) {
+        try {
+            if (enabled) {
+                final ChainStore.PluginEntry fresh = pluginEntryFromDir(entry.id);
+                if (fresh == null) {
+                    snack(getString(R.string.plugin_not_in_chain));
+                    rebuildDetail();
+                    return;
+                }
+                ChainStore.addPlugin(this, chain, fresh);
+                snack(getString(R.string.plugin_on, entry.id));
+            } else {
+                ChainStore.removePlugin(this, chain, entry.id);
+                snack(getString(R.string.plugin_off, entry.id));
+            }
+        } catch (IOException error) {
+            snack(getString(R.string.plugin_setting_missing));
+        }
+        broadcastRebuild();
+        rebuildDetail();
+    }
+
+    /** Reads role/version from a plugin package's manifest to build a chain entry. */
+    private ChainStore.PluginEntry pluginEntryFromDir(String id) {
+        for (File dir : pluginDirs()) {
+            final String[] info = manifestInfo(dir);
+            if (info[0].equals(id)) {
+                return new ChainStore.PluginEntry(id, info[2],
+                        info[1] == null ? "" : info[1]);
+            }
+        }
+        return null;
+    }
+
+    private void addSettingRow(LinearLayout parent, File chain,
+                               ChainStore.PluginEntry entry, String key, Object value) {
+        if (value instanceof Boolean) {
+            addSwitchRow(parent, R.drawable.ic_tune, key,
+                    getString(R.string.plugins_add_desc), (Boolean) value,
+                    (button, checked) -> {
+                        setSetting(chain, entry.id, key, checked);
+                    });
+        } else {
+            final int number = (int) ((Number) value).longValue();
+            addRow(parent, R.drawable.ic_tune, key,
+                    getString(R.string.settings_int_value, number),
+                    R.drawable.ic_chevron_right,
+                    v -> chooseIntSetting(chain, entry, key, number));
+        }
+    }
+
+    private void setSetting(File chain, String pluginId, String key, Object value) {
+        try {
+            ChainStore.setPluginSetting(this, chain, pluginId, key, value);
+            snack(getString(R.string.plugin_setting_changed, pluginId, key));
+        } catch (IOException error) {
+            snack(getString(R.string.plugin_setting_missing));
+        }
+        broadcastRebuild();
+        rebuildDetail();
+    }
+
+    private void chooseIntSetting(File chain, ChainStore.PluginEntry entry,
+                                  String key, int current) {
+        final int[] candidates = {Math.max(0, current - 1), current, current + 1};
+        final CharSequence[] labels = new CharSequence[candidates.length];
+        for (int i = 0; i < candidates.length; i++) {
+            labels[i] = getString(R.string.settings_int_value, candidates[i]);
+        }
+        int selected = 1;
+        choose(R.string.settings_int_title, labels, selected, (dialog, which) -> {
+            setSetting(chain, entry.id, key, candidates[which]);
+            dialog.dismiss();
+        });
+    }
+
+    private void newChainDialog() {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint(R.string.new_chain_hint);
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.new_chain_title)
+                .setView(input)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    final String name = input.getText().toString().trim();
+                    if (name.isEmpty()) return;
+                    try {
+                        final File newChain = ChainStore.chainFile(this, name);
+                        if (newChain.exists()) {
+                            snack(getString(R.string.new_chain_exists));
+                            return;
+                        }
+                        final File active = ChainStore.activeChain(this);
+                        ChainStore.writeChain(this, newChain,
+                                ChainStore.readChain(this, active));
+                        switchChain(newChain);
+                    } catch (IOException error) {
+                        snack(getString(R.string.plugin_setting_missing));
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void importChain(Uri uri) {
+        try {
+            final String display = uri.getLastPathSegment() != null
+                    ? uri.getLastPathSegment() : "imported.cbor";
+            final File target = ChainStore.chainFile(this, display);
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 FileOutputStream out = new FileOutputStream(target)) {
+                if (in == null) {
+                    snack(getString(R.string.import_no_file));
+                    return;
+                }
+                final byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
+            }
+            snack(getString(R.string.chain_imported, target.getName()));
+            switchChain(target);
+        } catch (IOException error) {
+            snack(getString(R.string.plugin_setting_missing));
+        }
+    }
+
+    /** Tells the running input service to rebuild the active chain. */
+    private void broadcastRebuild() {
+        final Intent intent = new Intent(PimeImeService.ACTION_REBUILD_CHAIN);
+        intent.setPackage(getPackageName());
+        sendBroadcast(intent);
     }
 
     /** Host-only display preferences; nothing here feeds the plugin chain. */

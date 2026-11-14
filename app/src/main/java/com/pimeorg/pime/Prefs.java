@@ -80,4 +80,13 @@ public final class Prefs {
     public static void setKeyboardPercent(Context context, int value) {
         prefs(context).edit().putInt("keyboard_percent", value).apply();
     }
+
+    /** Name of the active chain file (e.g. "default.cbor"); "default.cbor" if unset. */
+    public static String activeChain(Context context) {
+        return prefs(context).getString("active_chain", "default.cbor");
+    }
+
+    public static void setActiveChain(Context context, String name) {
+        prefs(context).edit().putString("active_chain", name).apply();
+    }
 }

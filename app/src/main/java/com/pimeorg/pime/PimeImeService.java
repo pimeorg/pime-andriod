@@ -1,7 +1,9 @@
 package com.pimeorg.pime;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.AssetManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -55,6 +57,9 @@ public final class PimeImeService extends InputMethodService
             "input.read", "workspace", "output.emit", "asset.read"
     };
 
+    /** Local action: the settings page edited a chain and wants the kernel rebuilt. */
+    public static final String ACTION_REBUILD_CHAIN = "com.pimeorg.pime.action.REBUILD_CHAIN";
+
     private static final int TOP_BAR_HEIGHT_DP = 44;
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
     /** Keys are laid out inside the view; this is everything around the four rows. */
@@ -68,6 +73,7 @@ public final class PimeImeService extends InputMethodService
     private TextView compositionView;
     private String composition = "";
     private final List<String> candidates = new ArrayList<>();
+    private BroadcastReceiver rebuildReceiver;
 
     @Override
     public void onCreate() {
@@ -102,14 +108,60 @@ public final class PimeImeService extends InputMethodService
         grantChainCapabilities();
         loadPlugins(pluginDir);
 
-        final byte[] config = readBytes(new File(chainDir, "default.cbor"));
-        if (!core.useGeneration(config != null ? config : EMPTY_GENERATION)) {
-            Log.w(TAG, "no active generation; keys stay unhandled");
+        activateActiveChain();
+        registerRebuildReceiver();
+    }
+
+    /** Builds and activates the chain selected in settings, or the empty one. */
+    private void activateActiveChain() {
+        final File chain = ChainStore.activeChain(this);
+        final byte[] config = readBytes(chain);
+        if (config != null && core.useGeneration(config)) {
+            Log.i(TAG, "active chain: " + chain.getName());
+        } else if (config == null) {
+            Log.w(TAG, "active chain " + chain.getName() + " missing; keys stay unhandled");
+            if (!core.useGeneration(EMPTY_GENERATION)) {
+                Log.w(TAG, "empty generation not activatable");
+            }
+        } else {
+            Log.w(TAG, "active chain " + chain.getName() + " not activatable");
+        }
+    }
+
+    /** Re-reads the active chain and rebuilds the generation when settings changed it. */
+    private void rebuildActiveChain() {
+        if (!coreReady) return;
+        final File chain = ChainStore.activeChain(this);
+        final byte[] config = readBytes(chain);
+        if (config == null || !core.useGeneration(config)) {
+            Log.w(TAG, "chain rebuild failed: " + chain.getName());
+        } else {
+            Log.i(TAG, "chain rebuilt: " + chain.getName());
+        }
+    }
+
+    private void registerRebuildReceiver() {
+        rebuildReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                rebuildActiveChain();
+            }
+        };
+        final IntentFilter filter = new IntentFilter(ACTION_REBUILD_CHAIN);
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(rebuildReceiver, filter,
+                    Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(rebuildReceiver, filter);
         }
     }
 
     @Override
     public void onDestroy() {
+        if (rebuildReceiver != null) {
+            unregisterReceiver(rebuildReceiver);
+            rebuildReceiver = null;
+        }
         if (core != null) core.stop();
         super.onDestroy();
     }

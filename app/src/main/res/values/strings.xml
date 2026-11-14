@@ -100,4 +100,32 @@
 
     <string name="ime_action_settings">键盘设置</string>
     <string name="ime_action_hide">收起键盘</string>
+
+    <!-- plugins page: chain & plugin management -->
+    <string name="section_chains">链方案</string>
+    <string name="section_chain_plugins">当前链插件</string>
+    <string name="section_plugin_settings">插件设置</string>
+    <string name="chain_current">当前</string>
+    <string name="chain_active">使用此链</string>
+    <string name="chain_name_empty">未命名链</string>
+    <string name="action_new_chain">新建链</string>
+    <string name="action_import_chain">导入链</string>
+    <string name="action_delete_chain">删除链</string>
+    <string name="new_chain_title">新建链名称</string>
+    <string name="new_chain_hint">链名（不含 .cbor）</string>
+    <string name="new_chain_exists">该链已存在</string>
+    <string name="chain_deleted">已删除链：%1$s</string>
+    <string name="chain_switched">已切换链：%1$s</string>
+    <string name="chain_imported">已导入链：%1$s</string>
+    <string name="plugin_on">已启用插件：%1$s</string>
+    <string name="plugin_off">已停用插件：%1$s</string>
+    <string name="plugin_setting_changed">已更新 %1$s 的 %2$s</string>
+    <string name="plugin_not_in_chain">该插件不在当前链中</string>
+    <string name="plugin_setting_missing">插件设置不可用</string>
+    <string name="settings_bool_true">开启</string>
+    <string name="settings_bool_false">关闭</string>
+    <string name="settings_int_title">%1$s 的 %2$s</string>
+    <string name="settings_int_value">当前：%1$d</string>
+    <string name="import_no_file">未选择文件</string>
+    <string name="plugins_add_desc">放入 files/plugins 的插件包在启动时自动加载；开关控制它是否参与当前链。</string>
 </resources>
