@@ -308,7 +308,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_pime_ime_PimeCore_nativeStart(JNIEnv* env, jobject thiz,
+Java_com_pimeorg_pime_PimeCore_nativeStart(JNIEnv* env, jobject thiz,
                                        jstring plugin_dir, jstring data_dir,
                                        jstring trust_dir, jint flags) {
     if (g_bridge) return 0;
@@ -371,13 +371,13 @@ Java_dev_pime_ime_PimeCore_nativeStart(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_dev_pime_ime_PimeCore_nativeStop(JNIEnv* env, jobject, jlong core) {
+Java_com_pimeorg_pime_PimeCore_nativeStop(JNIEnv* env, jobject, jlong core) {
     if (pime_core* instance = core_of(core)) pime_core_destroy(instance);
     release_globals(env);
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativePluginLoad(JNIEnv* env, jobject, jlong core,
+Java_com_pimeorg_pime_PimeCore_nativePluginLoad(JNIEnv* env, jobject, jlong core,
                                             jstring path) {
     pime_core* instance = core_of(core);
     if (!instance) return PIME_INVALID;
@@ -387,7 +387,7 @@ Java_dev_pime_ime_PimeCore_nativePluginLoad(JNIEnv* env, jobject, jlong core,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativePermission(JNIEnv* env, jobject, jlong core,
+Java_com_pimeorg_pime_PimeCore_nativePermission(JNIEnv* env, jobject, jlong core,
                                             jstring capability,
                                             jboolean granted) {
     pime_core* instance = core_of(core);
@@ -399,7 +399,7 @@ Java_dev_pime_ime_PimeCore_nativePermission(JNIEnv* env, jobject, jlong core,
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_pime_ime_PimeCore_nativeBuildGeneration(JNIEnv* env, jobject, jlong core,
+Java_com_pimeorg_pime_PimeCore_nativeBuildGeneration(JNIEnv* env, jobject, jlong core,
                                                  jbyteArray config) {
     pime_core* instance = core_of(core);
     if (!instance || !config) return 0;
@@ -415,7 +415,7 @@ Java_dev_pime_ime_PimeCore_nativeBuildGeneration(JNIEnv* env, jobject, jlong cor
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeActivateGeneration(JNIEnv*, jobject, jlong core,
+Java_com_pimeorg_pime_PimeCore_nativeActivateGeneration(JNIEnv*, jobject, jlong core,
                                                     jlong generation) {
     pime_core* instance = core_of(core);
     if (!instance || generation == 0) return PIME_INVALID;
@@ -424,7 +424,7 @@ Java_dev_pime_ime_PimeCore_nativeActivateGeneration(JNIEnv*, jobject, jlong core
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_pime_ime_PimeCore_nativeSessionCreate(JNIEnv*, jobject, jlong core) {
+Java_com_pimeorg_pime_PimeCore_nativeSessionCreate(JNIEnv*, jobject, jlong core) {
     pime_core* instance = core_of(core);
     if (!instance) return 0;
     pime_session_config config{};
@@ -435,12 +435,12 @@ Java_dev_pime_ime_PimeCore_nativeSessionCreate(JNIEnv*, jobject, jlong core) {
 }
 
 JNIEXPORT void JNICALL
-Java_dev_pime_ime_PimeCore_nativeSessionDestroy(JNIEnv*, jobject, jlong session) {
+Java_com_pimeorg_pime_PimeCore_nativeSessionDestroy(JNIEnv*, jobject, jlong session) {
     if (pime_session* value = session_of(session)) pime_session_destroy(value);
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeKey(JNIEnv* env, jobject, jlong session,
+Java_com_pimeorg_pime_PimeCore_nativeKey(JNIEnv* env, jobject, jlong session,
                                      jint keycode, jint modifiers, jint action,
                                      jstring text) {
     pime_session* value = session_of(session);
@@ -461,7 +461,7 @@ Java_dev_pime_ime_PimeCore_nativeKey(JNIEnv* env, jobject, jlong session,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeText(JNIEnv* env, jobject, jlong session,
+Java_com_pimeorg_pime_PimeCore_nativeText(JNIEnv* env, jobject, jlong session,
                                       jstring text) {
     pime_session* value = session_of(session);
     if (!value) return -PIME_INVALID;
@@ -475,7 +475,7 @@ Java_dev_pime_ime_PimeCore_nativeText(JNIEnv* env, jobject, jlong session,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeCandidate(JNIEnv*, jobject, jlong session,
+Java_com_pimeorg_pime_PimeCore_nativeCandidate(JNIEnv*, jobject, jlong session,
                                            jint index) {
     pime_session* value = session_of(session);
     if (!value) return PIME_INVALID;
@@ -487,7 +487,7 @@ Java_dev_pime_ime_PimeCore_nativeCandidate(JNIEnv*, jobject, jlong session,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeContext(JNIEnv* env, jobject, jlong session,
+Java_com_pimeorg_pime_PimeCore_nativeContext(JNIEnv* env, jobject, jlong session,
                                          jstring app_id, jint field_type,
                                          jint input_type, jstring locale,
                                          jint page_size, jint host_caps) {
@@ -510,7 +510,7 @@ Java_dev_pime_ime_PimeCore_nativeContext(JNIEnv* env, jobject, jlong session,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeFocus(JNIEnv*, jobject, jlong session,
+Java_com_pimeorg_pime_PimeCore_nativeFocus(JNIEnv*, jobject, jlong session,
                                        jboolean focused) {
     pime_session* value = session_of(session);
     if (!value) return PIME_INVALID;
@@ -518,7 +518,7 @@ Java_dev_pime_ime_PimeCore_nativeFocus(JNIEnv*, jobject, jlong session,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeSecure(JNIEnv*, jobject, jlong session,
+Java_com_pimeorg_pime_PimeCore_nativeSecure(JNIEnv*, jobject, jlong session,
                                         jboolean secure) {
     pime_session* value = session_of(session);
     if (!value) return PIME_INVALID;
@@ -526,19 +526,19 @@ Java_dev_pime_ime_PimeCore_nativeSecure(JNIEnv*, jobject, jlong session,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_pime_ime_PimeCore_nativeReset(JNIEnv*, jobject, jlong session) {
+Java_com_pimeorg_pime_PimeCore_nativeReset(JNIEnv*, jobject, jlong session) {
     pime_session* value = session_of(session);
     if (!value) return PIME_INVALID;
     return static_cast<jint>(pime_core_reset(value));
 }
 
 JNIEXPORT void JNICALL
-Java_dev_pime_ime_PimeCore_nativePump(JNIEnv*, jobject, jlong core) {
+Java_com_pimeorg_pime_PimeCore_nativePump(JNIEnv*, jobject, jlong core) {
     if (pime_core* instance = core_of(core)) pime_core_pump(instance);
 }
 
 JNIEXPORT void JNICALL
-Java_dev_pime_ime_PimeCore_nativePause(JNIEnv*, jobject, jlong core, jboolean paused) {
+Java_com_pimeorg_pime_PimeCore_nativePause(JNIEnv*, jobject, jlong core, jboolean paused) {
     pime_core* instance = core_of(core);
     if (!instance) return;
     if (paused) {
@@ -549,13 +549,13 @@ Java_dev_pime_ime_PimeCore_nativePause(JNIEnv*, jobject, jlong core, jboolean pa
 }
 
 JNIEXPORT jstring JNICALL
-Java_dev_pime_ime_PimeCore_nativeStatusString(JNIEnv* env, jobject, jint status) {
+Java_com_pimeorg_pime_PimeCore_nativeStatusString(JNIEnv* env, jobject, jint status) {
     const char* text = pime_status_string(static_cast<pime_status>(status));
     return to_jstring(env, text, static_cast<uint32_t>(std::strlen(text)));
 }
 
 JNIEXPORT jstring JNICALL
-Java_dev_pime_ime_PimeCore_nativeVersion(JNIEnv* env, jobject) {
+Java_com_pimeorg_pime_PimeCore_nativeVersion(JNIEnv* env, jobject) {
     uint32_t major = 0;
     uint32_t minor = 0;
     uint32_t patch = 0;

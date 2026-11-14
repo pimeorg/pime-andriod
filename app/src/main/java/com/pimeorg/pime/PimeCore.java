@@ -1,4 +1,4 @@
-package dev.pime.ime;
+package com.pimeorg.pime;
 
 /**
  * Thin JNI face of pime-core. Holds no input-method logic: it forwards host

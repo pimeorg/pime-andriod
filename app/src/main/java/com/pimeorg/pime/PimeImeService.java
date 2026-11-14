@@ -1,4 +1,4 @@
-package dev.pime.ime;
+package com.pimeorg.pime;
 
 import android.content.Context;
 import android.content.Intent;

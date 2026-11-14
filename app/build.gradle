@@ -6,12 +6,12 @@ def pimeCoreDir = new File(project.findProperty("pimeCoreDir")
         ?: new File(rootProject.projectDir.parentFile, "pime-core").absolutePath)
 
 android {
-    namespace "dev.pime.ime"
+    namespace "com.pimeorg.pime"
     compileSdk 36
     ndkVersion "28.2.13676358"
 
     defaultConfig {
-        applicationId "dev.pime.ime"
+        applicationId "com.pimeorg.pime"
         minSdk 24
         targetSdk 36
         versionCode 1

@@ -57,7 +57,7 @@
     <string name="row_license">许可证</string>
     <string name="plugins_count_value">%1$d 个</string>
     <string name="plugins_chain_desc">拼音默认链 · keymap → parse → translate → rank → format</string>
-    <string name="plugins_note">插件包只在首次启动时从 APK 复制到应用目录。重装 APK 不会覆盖已有插件；更新插件需清除应用数据（adb shell pm clear dev.pime.ime）或提升插件版本号。</string>
+    <string name="plugins_note">插件包只在首次启动时从 APK 复制到应用目录。重装 APK 不会覆盖已有插件；更新插件需清除应用数据（adb shell pm clear com.pimeorg.pime）或提升插件版本号。</string>
     <string name="storage_plugins_desc">完整插件包所在目录</string>
     <string name="storage_chains_desc">链配置所在目录</string>
     <string name="storage_note">应用数据位于内部存储，卸载应用即删除。debug 包与 release 包共用同一份数据目录。</string>
