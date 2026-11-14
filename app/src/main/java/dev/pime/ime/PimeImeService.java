@@ -250,7 +250,11 @@ public final class PimeImeService extends InputMethodService
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
         hideCandidates();
-        if (compositionView != null) compositionView.setVisibility(View.GONE);
+        /* The composition view owns the fill weight, so it stays in the layout
+         * even when there is nothing to show; dropping it (GONE) would let the
+         * two action buttons collapse to the left and the collapse key would
+         * no longer sit at the far right. */
+        if (compositionView != null) compositionView.setText("");
         if (!coreReady) return;
 
         if (!core.hasSession() && !core.openSession()) {
@@ -277,10 +281,7 @@ public final class PimeImeService extends InputMethodService
         }
         hideCandidates();
         composition = "";
-        if (compositionView != null) {
-            compositionView.setText("");
-            compositionView.setVisibility(View.GONE);
-        }
+        if (compositionView != null) compositionView.setText("");
         super.onFinishInput();
     }
 
@@ -346,8 +347,9 @@ public final class PimeImeService extends InputMethodService
         composition = text == null ? "" : text;
         if (compositionView == null) return;
         compositionView.setText(text);
-        compositionView.setVisibility(
-                text == null || text.isEmpty() ? View.GONE : View.VISIBLE);
+        /* Keep the view in the layout with an empty string so the fill weight it
+         * carries still pushes the action buttons to the right edge; visibility
+         * toggling would let the buttons jump left. */
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         if (text == null || text.isEmpty()) {
@@ -365,10 +367,7 @@ public final class PimeImeService extends InputMethodService
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null && text != null && !text.isEmpty()) ic.commitText(text, 1);
         composition = "";
-        if (compositionView != null) {
-            compositionView.setText("");
-            compositionView.setVisibility(View.GONE);
-        }
+        if (compositionView != null) compositionView.setText("");
         hideCandidates();
     }
 
