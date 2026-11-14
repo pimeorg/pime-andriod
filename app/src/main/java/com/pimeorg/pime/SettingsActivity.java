@@ -11,6 +11,11 @@ import android.os.Build;
 import android.os.Bundle;
 import android.net.Uri;
 import android.provider.Settings;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.TypefaceSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -24,8 +29,10 @@ import android.widget.TextView;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
+import androidx.appcompat.widget.PopupMenu;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
@@ -41,6 +48,7 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.snackbar.Snackbar;
+import com.google.android.material.textfield.TextInputLayout;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -50,8 +58,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Launcher entry: enable the IME, pick it, and show where plugins live. */
 public final class SettingsActivity extends AppCompatActivity {
@@ -75,6 +85,8 @@ public final class SettingsActivity extends AppCompatActivity {
     private Page detailPage;
     private int detailTitleRes;
     private ActivityResultLauncher<String[]> importChainLauncher;
+    /** Plugin whose settings panel is open on the chain page; null when none. */
+    private String expandedPluginId;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -297,8 +309,9 @@ public final class SettingsActivity extends AppCompatActivity {
 
     private CharSequence pluginSummary() {
         final int count = pluginDirs().length;
-        return count == 0 ? getString(R.string.no_plugins)
-                : count + " 个插件包 · 拼音默认链";
+        if (count == 0) return getString(R.string.no_plugins);
+        return getString(R.string.plugins_summary, count,
+                ChainStore.displayName(ChainStore.activeChain(this)));
     }
 
     private File[] pluginDirs() {
@@ -404,168 +417,321 @@ public final class SettingsActivity extends AppCompatActivity {
     }
 
     private void openPlugins() {
-        enterDetail(R.string.page_plugins, parent -> {
-            try {
-                buildPluginsPage(parent);
-            } catch (IOException error) {
-                addTextBlock(parent, getString(R.string.plugin_setting_missing));
-            }
-        });
+        expandedPluginId = null;
+        // Every read is guarded inside, so a corrupt chain file shows a warning
+        // row instead of replacing the whole page with an error.
+        enterDetail(R.string.page_plugins, this::buildPluginsPage);
     }
 
-    /** Builds the full chain + plugin management page for the active chain. */
-    private void buildPluginsPage(LinearLayout parent) throws IOException {
-        final String activeName = ChainStore.activeChainName(this);
+    /**
+     * One row per plugin, in processing order, with an inline switch and reorder
+     * arrows. Disabling a plugin moves it to the "not enabled" card rather than
+     * hiding it, so the same plugin never appears twice.
+     */
+    private void buildPluginsPage(LinearLayout parent) {
         final File active = ChainStore.activeChain(this);
+        final String activeName = ChainStore.activeChainName(this);
+        final List<ChainStore.PluginEntry> chainPlugins = readChainSafe(active);
+        final File[] installed = pluginDirs();
+        final Set<String> installedIds = new HashSet<>();
+        for (File dir : installed) installedIds.add(manifestInfo(dir)[0]);
 
         /* --- chain plans --- */
         addGroupTitle(parent, R.string.section_chains);
         final LinearLayout chainCard = addCard(parent);
         final List<File> chains = ChainStore.listChains(this);
-        if (chains.isEmpty()) {
-            addRow(chainCard, R.drawable.ic_folder, getString(R.string.chain_name_empty),
-                    null, 0, null);
-        }
-        for (int i = 0; i < chains.size(); i++) {
-            final File chain = chains.get(i);
+        for (File chain : chains) {
             final boolean isActive = chain.getName().equals(activeName);
-            final String subtitle = isActive
-                    ? getString(R.string.chain_active) : getString(R.string.plugins_chain_desc);
-            addChainRow(chainCard, chain, isActive, subtitle, !isActive,
-                    v -> switchChain(chain));
-            if (i != chains.size() - 1) addDivider(chainCard);
+            final int count = isActive ? chainPlugins.size() : readChainSafe(chain).size();
+            addChainRow(chainCard, chain, isActive, count, v -> switchChain(chain));
+            addDivider(chainCard);
         }
-        addRow(chainCard, R.drawable.ic_extension, getString(R.string.action_new_chain),
-                null, R.drawable.ic_chevron_right, v -> newChainDialog());
+        addRow(chainCard, R.drawable.ic_add, getString(R.string.action_new_chain),
+                getString(R.string.action_new_chain_desc), 0, v -> newChainDialog());
         addDivider(chainCard);
         addRow(chainCard, R.drawable.ic_folder, getString(R.string.action_import_chain),
-                null, R.drawable.ic_chevron_right,
+                getString(R.string.action_import_chain_desc), 0,
                 v -> importChainLauncher.launch(new String[]{"*/*"}));
 
-        /* --- plugins: every installed package, switch = in active chain --- */
-        final List<ChainStore.PluginEntry> chainPlugins = ChainStore.readChain(this, active);
-        addGroupTitle(parent, getString(R.string.section_chain_plugins) + " · "
-                + getString(R.string.plugins_count_value, chainPlugins.size()));
-        final LinearLayout pluginCard = addCard(parent);
-        final File[] allPlugins = pluginDirs();
-        if (allPlugins.length == 0) {
-            addRow(pluginCard, R.drawable.ic_extension, getString(R.string.no_plugins), null, 0, null);
-        }
-        for (int i = 0; i < allPlugins.length; i++) {
-            final String[] info = manifestInfo(allPlugins[i]);
-            final String id = info[0];
-            final String role = info[2];
-            final String version = info[1] == null ? "" : info[1];
-            boolean inChain = false;
-            for (ChainStore.PluginEntry p : chainPlugins) {
-                if (p.id.equals(id)) { inChain = true; break; }
-            }
-            final String subtitle = role + (version.isEmpty() ? "" : " · " + version);
-            addSwitchRow(pluginCard, R.drawable.ic_extension, id, subtitle, inChain,
-                    (button, checked) -> togglePlugin(active, id, role, version, checked));
-            if (i != allPlugins.length - 1) addDivider(pluginCard);
-        }
-
         /* --- processing order of the active chain --- */
-        if (!chainPlugins.isEmpty()) {
-            addGroupTitle(parent, R.string.section_chain_order);
-            final LinearLayout orderCard = addCard(parent);
-            for (int i = 0; i < chainPlugins.size(); i++) {
-                final ChainStore.PluginEntry entry = chainPlugins.get(i);
-                final String subtitle = entry.role + (entry.version.isEmpty()
-                        ? "" : " · " + entry.version);
-                addOrderRow(orderCard, entry.id, subtitle, i, 0, chainPlugins.size() - 1,
-                        (direction) -> {
-                            try {
-                                ChainStore.movePlugin(SettingsActivity.this, active,
-                                        entry.id, direction);
-                                snack(getString(R.string.plugin_order_changed, entry.id));
-                            } catch (IOException error) {
-                                snack(getString(R.string.plugin_setting_missing));
-                            }
-                            broadcastRebuild();
-                            rebuildDetail();
-                        });
-                if (i != chainPlugins.size() - 1) addDivider(orderCard);
+        addGroupTitle(parent, getString(R.string.section_chain_order) + " · "
+                + ChainStore.displayName(active));
+        final LinearLayout orderCard = addCard(parent);
+        if (chainPlugins.isEmpty()) {
+            addTextBlock(orderCard, getString(R.string.chain_empty_hint));
+        }
+        for (int i = 0; i < chainPlugins.size(); i++) {
+            final ChainStore.PluginEntry entry = chainPlugins.get(i);
+            addChainPluginRow(orderCard, active, entry, i, chainPlugins.size(),
+                    installedIds.contains(entry.id));
+            if (i != chainPlugins.size() - 1) addDivider(orderCard);
+        }
+
+        /* --- installed but not in the active chain --- */
+        final List<File> disabled = new ArrayList<>();
+        for (File dir : installed) {
+            final String id = manifestInfo(dir)[0];
+            boolean inChain = false;
+            for (ChainStore.PluginEntry entry : chainPlugins) {
+                if (entry.id.equals(id)) { inChain = true; break; }
+            }
+            if (!inChain) disabled.add(dir);
+        }
+        if (!disabled.isEmpty()) {
+            addGroupTitle(parent, getString(R.string.section_disabled_plugins) + " · "
+                    + getString(R.string.plugins_count_value, disabled.size()));
+            final LinearLayout disabledCard = addCard(parent);
+            for (int i = 0; i < disabled.size(); i++) {
+                final String[] info = manifestInfo(disabled.get(i));
+                addDisabledPluginRow(disabledCard, active, info[0], info[2], info[1]);
+                if (i != disabled.size() - 1) addDivider(disabledCard);
             }
         }
 
-        /* --- per-plugin settings --- */
-        final List<ChainStore.PluginEntry> withSettings = new ArrayList<>();
-        for (ChainStore.PluginEntry entry : chainPlugins) {
-            if (!entry.settings.isEmpty()) withSettings.add(entry);
-        }
-        if (!withSettings.isEmpty()) {
-            addGroupTitle(parent, R.string.section_plugin_settings);
-            for (ChainStore.PluginEntry entry : withSettings) {
-                final LinearLayout settingsCard = addCard(parent);
-                for (Map.Entry<String, Object> setting : entry.settings.entrySet()) {
-                    addSettingRow(settingsCard, active, entry, setting.getKey(),
-                            setting.getValue());
-                    addDivider(settingsCard);
-                }
-            }
-        }
-
+        addTextBlock(parent, getString(R.string.plugin_section_note));
         addTextBlock(parent, getString(R.string.plugins_note));
     }
 
-    /** A row showing a plugin's place in the chain, with up/down reorder buttons. */
-    private void addOrderRow(LinearLayout parent, String id, CharSequence subtitle,
-                             int index, int top, int bottom,
-                             java.util.function.IntConsumer onMove) {
+    /** Reads a chain, treating an unreadable file as an empty one. */
+    private List<ChainStore.PluginEntry> readChainSafe(File chain) {
+        try {
+            return ChainStore.readChain(this, chain);
+        } catch (IOException error) {
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * One plugin in the active chain: order number, friendly name, reorder
+     * arrows, an enable switch, and a settings panel that opens on tap.
+     */
+    private void addChainPluginRow(LinearLayout parent, File chain,
+                                   ChainStore.PluginEntry entry, int index, int count,
+                                   boolean installed) {
+        final boolean expanded = entry.id.equals(expandedPluginId);
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(72));
+        row.setMinimumHeight(dp(64));
         row.setPadding(dp(16), dp(8), dp(8), dp(8));
+        row.setClickable(true);
+        row.setFocusable(true);
+        final TypedValue ripple = new TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
+        row.setBackgroundResource(ripple.resourceId);
+        row.setOnClickListener(v -> toggleExpanded(entry.id));
 
-        // step badge
-        final TextView step = text("" + (index + 1), 14, true,
-                attrColor(com.google.android.material.R.attr.colorPrimary));
-        step.setGravity(Gravity.CENTER);
-        step.setMinWidth(dp(36));
-        final LinearLayout.LayoutParams stepParams = new LinearLayout.LayoutParams(
-                dp(36), ViewGroup.LayoutParams.WRAP_CONTENT);
-        row.addView(step, stepParams);
-
-        final ImageView icon = new ImageView(this);
-        icon.setImageResource(R.drawable.ic_extension);
-        icon.setImageTintList(ColorStateList.valueOf(
+        // The disclosure caret leads the row: next to the reorder arrows it read
+        // as a third arrow.
+        final ImageView caret = new ImageView(this);
+        caret.setImageResource(R.drawable.ic_expand_more);
+        caret.setImageTintList(ColorStateList.valueOf(
                 attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
-        icon.setContentDescription(null);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        caret.setContentDescription(getString(R.string.expand_plugin_settings));
+        caret.setScaleY(expanded ? -1f : 1f);
+        final LinearLayout.LayoutParams caretParams =
+                new LinearLayout.LayoutParams(dp(20), dp(20));
+        caretParams.setMarginEnd(dp(10));
+        row.addView(caret, caretParams);
 
         final LinearLayout lines = new LinearLayout(this);
         lines.setOrientation(LinearLayout.VERTICAL);
         final LinearLayout.LayoutParams lineParams =
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lineParams.setMarginStart(dp(16));
         row.addView(lines, lineParams);
-        lines.addView(text(id, 16, false,
-                attrColor(com.google.android.material.R.attr.colorOnSurface)));
-        if (subtitle != null) {
-            final TextView sub = text(subtitle, 14, false,
-                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
-            sub.setMaxLines(2);
-            sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            final LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            subParams.topMargin = dp(2);
-            lines.addView(sub, subParams);
+
+        // "3 · 拼音候选" — the step number carries the pipeline order.
+        final SpannableStringBuilder title = new SpannableStringBuilder();
+        title.append(String.valueOf(index + 1));
+        title.setSpan(new ForegroundColorSpan(
+                        attrColor(com.google.android.material.R.attr.colorPrimary)),
+                0, title.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        title.setSpan(new TypefaceSpan("sans-serif-medium"), 0, title.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        title.append("  ·  ").append(pluginLabel(entry.id));
+        final TextView titleView = text(title, 15, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurface));
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        lines.addView(titleView);
+
+        final StringBuilder subtitle = new StringBuilder();
+        if (!entry.role.isEmpty()) subtitle.append(entry.role);
+        if (!entry.version.isEmpty()) {
+            if (subtitle.length() > 0) subtitle.append(" · ");
+            subtitle.append(entry.version);
         }
+        final TextView sub = text(subtitle, 12, false, installed
+                ? attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)
+                : ContextCompat.getColor(this, R.color.warning));
+        sub.setSingleLine(true);
+        sub.setEllipsize(TextUtils.TruncateAt.END);
+        if (!installed) sub.setText(getString(R.string.plugin_missing, subtitle));
+        lines.addView(sub);
+        row.setContentDescription(getString(R.string.plugin_row_desc,
+                pluginLabel(entry.id), subtitle, index + 1));
 
         final ImageView up = arrowButton(R.drawable.ic_arrow_up,
-                getString(R.string.action_move_up), index != top,
-                () -> onMove.accept(-1));
+                getString(R.string.action_move_up_named, pluginLabel(entry.id)), index != 0,
+                () -> movePlugin(chain, entry, -1));
         final ImageView down = arrowButton(R.drawable.ic_arrow_down,
-                getString(R.string.action_move_down), index != bottom,
-                () -> onMove.accept(1));
-        row.addView(up, new LinearLayout.LayoutParams(dp(40), dp(40)));
-        row.addView(down, new LinearLayout.LayoutParams(dp(40), dp(40)));
+                getString(R.string.action_move_down_named, pluginLabel(entry.id)),
+                index != count - 1, () -> movePlugin(chain, entry, 1));
+        row.addView(up, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        row.addView(down, new LinearLayout.LayoutParams(dp(36), dp(36)));
+
+        final MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setChecked(true);
+        // The switch announces its own state; the description only names it.
+        toggle.setContentDescription(pluginLabel(entry.id));
+        toggle.setOnCheckedChangeListener((button, checked) -> {
+            if (!checked) togglePlugin(chain, entry.id, entry.role, entry.version, false);
+        });
+        final LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        toggleParams.setMarginStart(dp(4));
+        row.addView(toggle, toggleParams);
 
         parent.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        if (expanded) addPluginPanel(parent, chain, entry, installed);
+    }
+
+    /** The expanded part of a plugin row: identity plus its chain settings. */
+    private void addPluginPanel(LinearLayout parent, File chain, ChainStore.PluginEntry entry,
+                                boolean installed) {
+        addDivider(parent);
+        final LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(attrColor(
+                com.google.android.material.R.attr.colorSurfaceContainerHigh));
+        panel.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+        panel.addView(text(entry.id, 12, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+
+        if (!installed) {
+            panel.addView(text(getString(R.string.plugin_missing_note), 12, false,
+                    ContextCompat.getColor(this, R.color.warning)));
+        } else if (entry.settings.isEmpty()) {
+            final TextView empty = text(getString(R.string.plugin_no_settings), 13, false,
+                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
+            empty.setPadding(0, dp(6), 0, 0);
+            panel.addView(empty);
+        } else {
+            for (Map.Entry<String, Object> setting : entry.settings.entrySet()) {
+                addPanelSettingRow(panel, chain, entry, setting.getKey(), setting.getValue());
+            }
+        }
+        parent.addView(panel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    /** A compact settings row inside an expanded plugin panel. */
+    private void addPanelSettingRow(LinearLayout parent, File chain,
+                                    ChainStore.PluginEntry entry, String key, Object value) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(48));
+
+        final LinearLayout lines = new LinearLayout(this);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout.LayoutParams lineParams =
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lines.setPadding(0, dp(8), dp(8), dp(8));
+        row.addView(lines, lineParams);
+        lines.addView(text(settingLabel(key), 14, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurface)));
+
+        if (value instanceof Boolean) {
+            lines.addView(text(getString((Boolean) value
+                            ? R.string.settings_bool_true : R.string.settings_bool_false),
+                    12, false, attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+            final MaterialSwitch toggle = new MaterialSwitch(this);
+            toggle.setChecked((Boolean) value);
+            toggle.setContentDescription(settingLabel(key));
+            toggle.setOnCheckedChangeListener((button, checked) ->
+                    setSetting(chain, entry.id, key, checked));
+            row.addView(toggle, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        } else {
+            final int number = (int) ((Number) value).longValue();
+            lines.addView(text(getString(R.string.settings_int_value, number), 12, false,
+                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+            row.setClickable(true);
+            row.setFocusable(true);
+            final TypedValue ripple = new TypedValue();
+            getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
+            row.setBackgroundResource(ripple.resourceId);
+            row.setOnClickListener(v -> editIntSetting(chain, entry, key, number));
+            final ImageView edit = new ImageView(this);
+            edit.setImageResource(R.drawable.ic_tune);
+            edit.setImageTintList(ColorStateList.valueOf(
+                    attrColor(com.google.android.material.R.attr.colorPrimary)));
+            edit.setContentDescription(settingLabel(key));
+            row.addView(edit, new LinearLayout.LayoutParams(dp(20), dp(20)));
+        }
+        parent.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    /** An installed plugin that is not part of the active chain; the switch adds it. */
+    private void addDisabledPluginRow(LinearLayout parent, File chain, String id, String role,
+                                      String version) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(64));
+        // Start where the chain rows' text starts (caret + gap), so both cards
+        // line up.
+        row.setPadding(dp(46), dp(8), dp(16), dp(8));
+
+        final MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setChecked(false);
+        toggle.setContentDescription(pluginLabel(id));
+        toggle.setOnCheckedChangeListener((button, checked) -> {
+            if (checked) togglePlugin(chain, id, role, version, true);
+        });
+        row.setOnClickListener(v -> toggle.toggle());
+        row.setFocusable(true);
+        final TypedValue ripple = new TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
+        row.setBackgroundResource(ripple.resourceId);
+
+        final LinearLayout lines = new LinearLayout(this);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout.LayoutParams lineParams =
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        row.addView(lines, lineParams);
+        lines.addView(text(pluginLabel(id), 15, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurface)));
+
+        final StringBuilder subtitle = new StringBuilder();
+        if (role != null && !role.isEmpty()) subtitle.append(role);
+        if (version != null && !version.isEmpty()) {
+            if (subtitle.length() > 0) subtitle.append(" · ");
+            subtitle.append(version);
+        }
+        final TextView sub = text(subtitle, 12, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
+        sub.setSingleLine(true);
+        sub.setEllipsize(TextUtils.TruncateAt.END);
+        lines.addView(sub);
+
+        final LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        toggleParams.setMarginStart(dp(8));
+        row.addView(toggle, toggleParams);
+
+        parent.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void toggleExpanded(String id) {
+        expandedPluginId = id.equals(expandedPluginId) ? null : id;
+        rebuildDetail();
     }
 
     private ImageView arrowButton(int iconRes, String contentDesc, boolean enabled,
@@ -587,24 +753,133 @@ public final class SettingsActivity extends AppCompatActivity {
         return view;
     }
 
-    private void switchChain(File chain) {
-        ChainStore.setActiveChain(this, chain.getName());
+    private void movePlugin(File chain, ChainStore.PluginEntry entry, int direction) {
+        try {
+            ChainStore.movePlugin(this, chain, entry.id, direction);
+            snack(getString(R.string.plugin_order_changed, pluginLabel(entry.id)));
+        } catch (IOException error) {
+            snack(getString(R.string.plugin_setting_missing));
+        }
         broadcastRebuild();
-        snack(getString(R.string.chain_switched, chain.getName()));
         rebuildDetail();
     }
 
+    private void switchChain(File chain) {
+        ChainStore.setActiveChain(this, chain.getName());
+        expandedPluginId = null;
+        broadcastRebuild();
+        snack(getString(R.string.chain_switched, ChainStore.displayName(chain)));
+        rebuildDetail();
+    }
+
+    private void showChainMenu(View anchor, File chain, boolean isActive) {
+        final PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add(0, 1, 0, R.string.action_rename_chain);
+        final android.view.MenuItem delete =
+                menu.getMenu().add(0, 2, 1, R.string.action_delete_chain);
+        delete.setEnabled(!isActive);
+        menu.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 1) {
+                renameChainDialog(chain);
+                return true;
+            }
+            if (item.getItemId() == 2) {
+                deleteChain(chain);
+                return true;
+            }
+            return false;
+        });
+        menu.show();
+    }
+
+    private void renameChainDialog(File chain) {
+        final String current = ChainStore.displayName(chain);
+        promptForName(R.string.action_rename_chain, current, getString(R.string.chain_name_hint),
+                name -> {
+                    if (name.isEmpty()) return getString(R.string.chain_name_invalid);
+                    if (!name.equals(current) && ChainStore.chainFile(this, name).exists()) {
+                        return getString(R.string.new_chain_exists);
+                    }
+                    return null;
+                },
+                name -> {
+                    if (name.equals(current)) return;
+                    try {
+                        ChainStore.renameChain(this, chain, name);
+                        snack(getString(R.string.chain_renamed, name));
+                        broadcastRebuild();
+                    } catch (IOException error) {
+                        snack(getString(R.string.plugin_setting_missing));
+                    }
+                    rebuildDetail();
+                });
+    }
+
+    /**
+     * A one-field prompt. Validation errors are shown on the field itself: a
+     * Snackbar would be hidden behind the dialog window.
+     */
+    private void promptForName(int titleRes, String initial, String hint,
+                               java.util.function.Function<String, CharSequence> validate,
+                               java.util.function.Consumer<String> onAccept) {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(initial);
+        input.setSelection(input.getText().length());
+        final TextInputLayout box = new TextInputLayout(this, null,
+                com.google.android.material.R.attr.textInputOutlinedStyle);
+        box.setHint(hint);
+        box.addView(input);
+        final android.widget.FrameLayout holder = new android.widget.FrameLayout(this);
+        holder.setPadding(dp(24), dp(8), dp(24), 0);
+        holder.addView(box);
+        final AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(titleRes)
+                .setView(holder)
+                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            focusAndShowKeyboard(dialog, input);
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+                final String value = input.getText().toString().trim();
+                final CharSequence error = validate.apply(value);
+                if (error != null) {
+                    box.setError(error);
+                    return;
+                }
+                dialog.dismiss();
+                onAccept.accept(value);
+            });
+        });
+        dialog.show();
+    }
+
+    /**
+     * Puts the caret in the field and asks for the keyboard: an alert dialog
+     * with a text field otherwise opens with the buttons focused, so the first
+     * thing a user types goes nowhere.
+     */
+    private void focusAndShowKeyboard(AlertDialog dialog, android.widget.EditText input) {
+        input.requestFocus();
+        input.setSelection(0, input.getText().length());
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setSoftInputMode(
+                    android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        }
+    }
+
     private void deleteChain(File chain) {
+        final String name = ChainStore.displayName(chain);
         if (chain.getName().equals(ChainStore.activeChainName(this))) {
-            snack(getString(R.string.chain_current));
+            snack(getString(R.string.chain_in_use_note));
             return;
         }
         new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.action_delete_chain)
-                .setMessage(getString(R.string.chain_delete_confirm, chain.getName()))
+                .setMessage(getString(R.string.chain_delete_confirm, name))
                 .setPositiveButton(android.R.string.ok, (dialog, which) -> {
                     if (chain.delete()) {
-                        snack(getString(R.string.chain_deleted, chain.getName()));
+                        snack(getString(R.string.chain_deleted, name));
                     } else {
                         snack(getString(R.string.plugin_setting_missing));
                     }
@@ -615,45 +890,47 @@ public final class SettingsActivity extends AppCompatActivity {
                 .show();
     }
 
+    /**
+     * Adds or removes a plugin, remembering the chain as it was so the Snackbar
+     * can put it back — reordering is a whole-file rewrite either way.
+     */
     private void togglePlugin(File chain, String id, String role, String version,
                               boolean enabled) {
+        final List<ChainStore.PluginEntry> before = readChainSafe(chain);
         try {
             if (enabled) {
-                ChainStore.addPlugin(this, chain,
-                        new ChainStore.PluginEntry(id, role, version));
-                snack(getString(R.string.plugin_on, id));
+                ChainStore.addPlugin(this, chain, new ChainStore.PluginEntry(id, role, version));
             } else {
                 ChainStore.removePlugin(this, chain, id);
-                snack(getString(R.string.plugin_off, id));
             }
+        } catch (IOException error) {
+            snack(getString(R.string.plugin_setting_missing));
+            rebuildDetail();
+            return;
+        }
+        broadcastRebuild();
+        Snackbar.make(findViewById(R.id.root),
+                        getString(enabled ? R.string.plugin_on : R.string.plugin_off,
+                                pluginLabel(id)), Snackbar.LENGTH_LONG)
+                .setAction(R.string.snack_undo, v -> restoreChain(chain, before))
+                .show();
+        rebuildDetail();
+    }
+
+    private void restoreChain(File chain, List<ChainStore.PluginEntry> entries) {
+        try {
+            ChainStore.writeChain(this, chain, entries);
         } catch (IOException error) {
             snack(getString(R.string.plugin_setting_missing));
         }
         broadcastRebuild();
         rebuildDetail();
-    }
-
-    private void addSettingRow(LinearLayout parent, File chain,
-                               ChainStore.PluginEntry entry, String key, Object value) {
-        if (value instanceof Boolean) {
-            addSwitchRow(parent, R.drawable.ic_tune, key,
-                    getString(R.string.plugins_add_desc), (Boolean) value,
-                    (button, checked) -> {
-                        setSetting(chain, entry.id, key, checked);
-                    });
-        } else {
-            final int number = (int) ((Number) value).longValue();
-            addRow(parent, R.drawable.ic_tune, key,
-                    getString(R.string.settings_int_value, number),
-                    R.drawable.ic_chevron_right,
-                    v -> chooseIntSetting(chain, entry, key, number));
-        }
     }
 
     private void setSetting(File chain, String pluginId, String key, Object value) {
         try {
             ChainStore.setPluginSetting(this, chain, pluginId, key, value);
-            snack(getString(R.string.plugin_setting_changed, pluginId, key));
+            snack(getString(R.string.plugin_setting_changed, settingLabel(key)));
         } catch (IOException error) {
             snack(getString(R.string.plugin_setting_missing));
         }
@@ -661,45 +938,95 @@ public final class SettingsActivity extends AppCompatActivity {
         rebuildDetail();
     }
 
-    private void chooseIntSetting(File chain, ChainStore.PluginEntry entry,
-                                  String key, int current) {
-        final int[] candidates = {Math.max(0, current - 1), current, current + 1};
-        final CharSequence[] labels = new CharSequence[candidates.length];
-        for (int i = 0; i < candidates.length; i++) {
-            labels[i] = getString(R.string.settings_int_value, candidates[i]);
-        }
-        int selected = 1;
-        choose(R.string.settings_int_title, labels, selected, (dialog, which) -> {
-            setSetting(chain, entry.id, key, candidates[which]);
-            dialog.dismiss();
+    /** Free-form number entry; the previous ±1 choices were too coarse. */
+    private void editIntSetting(File chain, ChainStore.PluginEntry entry, String key, int current) {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(current));
+        input.setSelection(input.getText().length());
+        final TextInputLayout box = new TextInputLayout(this, null,
+                com.google.android.material.R.attr.textInputOutlinedStyle);
+        box.setHint(getString(R.string.settings_int_hint));
+        box.addView(input);
+        final android.widget.FrameLayout holder = new android.widget.FrameLayout(this);
+        holder.setPadding(dp(24), dp(8), dp(24), 0);
+        holder.addView(box);
+        final AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(getString(R.string.settings_int_title, pluginLabel(entry.id),
+                        settingLabel(key)))
+                .setView(holder)
+                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            focusAndShowKeyboard(dialog, input);
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+                final int value;
+                try {
+                    value = Integer.parseInt(input.getText().toString().trim());
+                } catch (NumberFormatException error) {
+                    box.setError(getString(R.string.settings_int_invalid));
+                    return;
+                }
+                if (value < 0) {
+                    box.setError(getString(R.string.settings_int_invalid));
+                    return;
+                }
+                dialog.dismiss();
+                setSetting(chain, entry.id, key, value);
+            });
         });
+        dialog.show();
+    }
+
+    /** Friendly name for a known plugin id; unknown ids stay as they are. */
+    private CharSequence pluginLabel(String id) {
+        switch (id) {
+            case "pime-keymap-default":
+                return getString(R.string.plugin_label_keymap);
+            case "pime-pinyin-parse":
+                return getString(R.string.plugin_label_parse);
+            case "pime-pinyin-translate":
+                return getString(R.string.plugin_label_translate);
+            case "pime-pinyin-rank":
+                return getString(R.string.plugin_label_rank);
+            case "pime-candidates-format":
+                return getString(R.string.plugin_label_format);
+            default:
+                return id;
+        }
+    }
+
+    private CharSequence settingLabel(String key) {
+        switch (key) {
+            case "max_candidates":
+                return getString(R.string.setting_label_max_candidates);
+            case "page_size":
+                return getString(R.string.setting_label_page_size);
+            default:
+                return key;
+        }
     }
 
     private void newChainDialog() {
-        final android.widget.EditText input = new android.widget.EditText(this);
-        input.setHint(R.string.new_chain_hint);
-        new MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.new_chain_title)
-                .setView(input)
-                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
-                    final String name = input.getText().toString().trim();
-                    if (name.isEmpty()) return;
+        promptForName(R.string.new_chain_title, "", getString(R.string.new_chain_hint),
+                name -> {
+                    if (name.isEmpty()) return getString(R.string.chain_name_invalid);
+                    if (ChainStore.chainFile(this, name).exists()) {
+                        return getString(R.string.new_chain_exists);
+                    }
+                    return null;
+                },
+                name -> {
                     try {
-                        final File newChain = ChainStore.chainFile(this, name);
-                        if (newChain.exists()) {
-                            snack(getString(R.string.new_chain_exists));
-                            return;
-                        }
-                        final File active = ChainStore.activeChain(this);
-                        ChainStore.writeChain(this, newChain,
-                                ChainStore.readChain(this, active));
-                        switchChain(newChain);
+                        final File created = ChainStore.chainFile(this, name);
+                        ChainStore.writeChain(this, created,
+                                ChainStore.readChain(this, ChainStore.activeChain(this)));
+                        switchChain(created);
                     } catch (IOException error) {
                         snack(getString(R.string.plugin_setting_missing));
                     }
-                })
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
+                });
     }
 
     private void importChain(Uri uri) {
@@ -897,8 +1224,14 @@ public final class SettingsActivity extends AppCompatActivity {
     /** Rebuilds the open detail page so it shows freshly changed preferences. */
     private void rebuildDetail() {
         if (!inDetail || detailPage == null) return;
+        final androidx.core.widget.NestedScrollView scroll =
+                (androidx.core.widget.NestedScrollView) detailScroll;
+        final int position = scroll.getScrollY();
         detailContent.removeAllViews();
         detailPage.build(detailContent);
+        // Toggling a switch rebuilds the page; without this the list would jump
+        // back to the top and the row you just changed would scroll away.
+        scroll.post(() -> scroll.scrollTo(0, position));
     }
 
     private void leaveDetail() {
@@ -1072,13 +1405,16 @@ public final class SettingsActivity extends AppCompatActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
-    /** A selectable row for one chain: tap the row to switch, tap the trash to delete. */
-    private void addChainRow(LinearLayout parent, File chain, boolean isActive,
-                             String subtitle, boolean deletable, View.OnClickListener onSwitch) {
+    /**
+     * One chain plan: tap to make it active, overflow for rename/delete. A check
+     * mark (rather than bold text alone) is what says "this one is in use".
+     */
+    private void addChainRow(LinearLayout parent, File chain, boolean isActive, int count,
+                             View.OnClickListener onSwitch) {
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(72));
+        row.setMinimumHeight(dp(68));
         row.setPadding(dp(16), dp(8), dp(8), dp(8));
         row.setClickable(true);
         row.setFocusable(true);
@@ -1087,48 +1423,50 @@ public final class SettingsActivity extends AppCompatActivity {
         row.setBackgroundResource(ripple.resourceId);
         row.setOnClickListener(onSwitch);
 
-        final ImageView icon = new ImageView(this);
-        icon.setImageResource(R.drawable.ic_folder);
-        icon.setImageTintList(ColorStateList.valueOf(
-                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
-        icon.setContentDescription(null);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        final ImageView mark = new ImageView(this);
+        mark.setImageResource(isActive ? R.drawable.ic_check : R.drawable.ic_link);
+        mark.setImageTintList(ColorStateList.valueOf(isActive
+                ? attrColor(com.google.android.material.R.attr.colorPrimary)
+                : attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+        mark.setContentDescription(null);
+        row.addView(mark, new LinearLayout.LayoutParams(dp(22), dp(22)));
 
         final LinearLayout lines = new LinearLayout(this);
         lines.setOrientation(LinearLayout.VERTICAL);
         final LinearLayout.LayoutParams lineParams =
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lineParams.setMarginStart(dp(16));
+        lineParams.setMarginStart(dp(14));
         row.addView(lines, lineParams);
 
-        lines.addView(text(chain.getName(), 16, isActive,
-                attrColor(com.google.android.material.R.attr.colorOnSurface)));
-        if (subtitle != null) {
-            final TextView sub = text(subtitle, 14, false,
-                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
-            sub.setMaxLines(2);
-            sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            final LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            subParams.topMargin = dp(2);
-            lines.addView(sub, subParams);
-        }
+        final TextView name = text(ChainStore.displayName(chain), 16, isActive,
+                attrColor(com.google.android.material.R.attr.colorOnSurface));
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        lines.addView(name);
 
-        if (deletable) {
-            final ImageView trash = new ImageView(this);
-            trash.setImageResource(R.drawable.ic_trash);
-            trash.setImageTintList(ColorStateList.valueOf(
-                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
-            trash.setContentDescription(getString(R.string.action_delete_chain));
-            trash.setClickable(true);
-            trash.setFocusable(true);
-            final TypedValue trashRipple = new TypedValue();
-            getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,
-                    trashRipple, true);
-            trash.setBackgroundResource(trashRipple.resourceId);
-            trash.setOnClickListener(v -> deleteChain(chain));
-            row.addView(trash, new LinearLayout.LayoutParams(dp(40), dp(40)));
-        }
+        final LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        subParams.topMargin = dp(2);
+        lines.addView(text(getString(R.string.chain_summary, count, getString(isActive
+                ? R.string.chain_current : R.string.chain_switch)), 13, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)), subParams);
+
+        final ImageView more = new ImageView(this);
+        more.setImageResource(R.drawable.ic_more_vert);
+        more.setImageTintList(ColorStateList.valueOf(
+                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+        more.setContentDescription(getString(R.string.action_chain_more));
+        more.setClickable(true);
+        more.setFocusable(true);
+        final TypedValue moreRipple = new TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,
+                moreRipple, true);
+        more.setBackgroundResource(moreRipple.resourceId);
+        more.setOnClickListener(v -> showChainMenu(v, chain, isActive));
+        final LinearLayout.LayoutParams moreParams =
+                new LinearLayout.LayoutParams(dp(40), dp(40));
+        moreParams.setMarginStart(dp(4));
+        row.addView(more, moreParams);
 
         parent.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));

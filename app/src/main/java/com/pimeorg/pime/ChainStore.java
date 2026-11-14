@@ -82,6 +82,27 @@ public final class ChainStore {
         return base + ".cbor";
     }
 
+    /** The name to show in the UI: the file name without the .cbor extension. */
+    public static String displayName(File chain) {
+        final String name = chain.getName();
+        return name.endsWith(".cbor") ? name.substring(0, name.length() - 5) : name;
+    }
+
+    /**
+     * Renames a chain file. The active chain keeps being the active one, since
+     * the preference stores the file name and is updated here.
+     */
+    public static void renameChain(Context context, File chain, String newName)
+            throws IOException {
+        final File target = chainFile(context, newName);
+        if (target.equals(chain)) return;
+        if (target.exists()) throw new IOException("chain already exists: " + target);
+        if (!chain.renameTo(target)) throw new IOException("cannot rename " + chain);
+        if (chain.getName().equals(Prefs.activeChain(context))) {
+            Prefs.setActiveChain(context, target.getName());
+        }
+    }
+
     /* ------------------------------------------------------------ active chain */
 
     public static String activeChainName(Context context) {
