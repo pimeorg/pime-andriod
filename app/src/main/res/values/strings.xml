@@ -104,6 +104,10 @@
     <!-- plugins page: chain & plugin management -->
     <string name="section_chains">链方案</string>
     <string name="section_chain_plugins">当前链插件</string>
+    <string name="section_chain_order">处理顺序</string>
+    <string name="action_move_up">上移</string>
+    <string name="action_move_down">下移</string>
+    <string name="plugin_order_changed">已调整 %1$s 的顺序</string>
     <string name="section_plugin_settings">插件设置</string>
     <string name="chain_current">当前</string>
     <string name="chain_active">使用此链</string>
@@ -111,6 +115,7 @@
     <string name="action_new_chain">新建链</string>
     <string name="action_import_chain">导入链</string>
     <string name="action_delete_chain">删除链</string>
+    <string name="chain_delete_confirm">删除「%1$s」？当前链不会被删除。</string>
     <string name="new_chain_title">新建链名称</string>
     <string name="new_chain_hint">链名（不含 .cbor）</string>
     <string name="new_chain_exists">该链已存在</string>

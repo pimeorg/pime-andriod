@@ -156,6 +156,26 @@ public final class ChainStore {
         }
     }
 
+    /**
+     * Moves a plugin one slot up (direction -1) or down (direction 1) in the
+     * chain's processing order. The array order is the stage order, so this is
+     * the lever that actually changes how a chain behaves.
+     */
+    public static void movePlugin(Context context, File file, String id, int direction)
+            throws IOException {
+        final List<PluginEntry> plugins = readChain(context, file);
+        for (int i = 0; i < plugins.size(); i++) {
+            if (plugins.get(i).id.equals(id)) {
+                final int target = i + direction;
+                if (target < 0 || target >= plugins.size()) return;
+                final PluginEntry moved = plugins.remove(i);
+                plugins.add(target, moved);
+                writeChain(context, file, plugins);
+                return;
+            }
+        }
+    }
+
     /** Inserts a plugin entry right before the one with the given id, or at the end. */
     public static void insertBefore(Context context, File file, PluginEntry entry,
                                     String beforeId) throws IOException {

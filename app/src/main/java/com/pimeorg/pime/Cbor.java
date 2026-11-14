@@ -40,10 +40,10 @@ final class Cbor {
                 return arg;
             case 1: // negative integer
                 return arg - 1;
-            case 2: // text string
-                return readText(arg, in);
-            case 3: // byte string
+            case 2: // byte string
                 return readBytes(arg, in);
+            case 3: // text string
+                return readText(arg, in);
             case 4: // array
                 return readArray(arg, in);
             case 5: // map
@@ -154,12 +154,12 @@ final class Cbor {
 
     private static void writeText(String value, ByteArrayOutputStream out) {
         final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        writeHeader(2, bytes.length, out);
+        writeHeader(3, bytes.length, out);
         out.write(bytes, 0, bytes.length);
     }
 
     private static void writeBytes(byte[] value, ByteArrayOutputStream out) {
-        writeHeader(3, value.length, out);
+        writeHeader(2, value.length, out);
         out.write(value, 0, value.length);
     }
 
