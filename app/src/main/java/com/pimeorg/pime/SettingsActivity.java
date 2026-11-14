@@ -85,6 +85,11 @@ public final class SettingsActivity extends AppCompatActivity {
     private Page detailPage;
     private int detailTitleRes;
     private ActivityResultLauncher<String[]> importChainLauncher;
+    private ActivityResultLauncher<String[]> importPluginLauncher;
+    private ActivityResultLauncher<Uri> importFolderLauncher;
+    /** Copies imported packages off the main thread; a package can carry a model. */
+    private final java.util.concurrent.ExecutorService importExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
     /** Plugin whose settings panel is open on the chain page; null when none. */
     private String expandedPluginId;
 
@@ -115,6 +120,14 @@ public final class SettingsActivity extends AppCompatActivity {
         importChainLauncher = registerForActivityResult(
                 new ActivityResultContracts.OpenDocument(), result -> {
                     if (result != null) importChain(result);
+                });
+        importPluginLauncher = registerForActivityResult(
+                new OpenDocumentInDownloads(), result -> {
+                    if (result != null) importPlugin(result);
+                });
+        importFolderLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocumentTree(), result -> {
+                    if (result != null) importPlugin(result);
                 });
 
         // Wide screens (tablets, landscape) keep a 640dp reading column, matching
@@ -167,6 +180,12 @@ public final class SettingsActivity extends AppCompatActivity {
         // Switching the input method from the picker dialog never pauses the
         // activity, so onResume alone would leave the status stale.
         if (hasFocus) refreshStatus();
+    }
+
+    @Override
+    protected void onDestroy() {
+        importExecutor.shutdownNow();
+        super.onDestroy();
     }
 
     // ------------------------------------------------------------------ home
@@ -487,6 +506,18 @@ public final class SettingsActivity extends AppCompatActivity {
                 if (i != disabled.size() - 1) addDivider(disabledCard);
             }
         }
+
+        /* --- installing more packages --- */
+        addGroupTitle(parent, getString(R.string.section_packages) + " · "
+                + getString(R.string.plugins_count_value, installed.length));
+        final LinearLayout packageCard = addCard(parent);
+        addRow(packageCard, R.drawable.ic_add, getString(R.string.action_import_plugin),
+                getString(R.string.action_import_plugin_desc), 0,
+                v -> importPluginLauncher.launch(new String[]{"*/*"}));
+        addDivider(packageCard);
+        addRow(packageCard, R.drawable.ic_folder, getString(R.string.action_import_folder),
+                getString(R.string.action_import_folder_desc), 0,
+                v -> importFolderLauncher.launch(downloadsUri()));
 
         addTextBlock(parent, getString(R.string.plugin_section_note));
         addTextBlock(parent, getString(R.string.plugins_note));
@@ -1027,6 +1058,75 @@ public final class SettingsActivity extends AppCompatActivity {
                         snack(getString(R.string.plugin_setting_missing));
                     }
                 });
+    }
+
+    /**
+     * A picked .zip or folder. The manifest is read first and only the copy is
+     * deferred, so a bad package is rejected before anything is written and a
+     * same-name package can be confirmed before it is replaced.
+     */
+    private void importPlugin(Uri picked) {
+        final PluginStore.Manifest manifest;
+        try {
+            manifest = PluginStore.readManifest(this, picked);
+        } catch (IOException error) {
+            snack(getString(R.string.plugin_import_failed, error.getMessage()));
+            return;
+        }
+        final File target = new File(PluginStore.dir(this), manifest.packageName());
+        final boolean replace = target.exists();
+        final List<CharSequence> warnings = new ArrayList<>();
+        if (replace) {
+            warnings.add(getString(R.string.plugin_import_exists, target.getName()));
+        }
+        if (!manifest.platformDeclared) {
+            warnings.add(getString(R.string.plugin_import_platform,
+                    PluginStore.platformToken()));
+        }
+        if (warnings.isEmpty()) {
+            startInstall(picked, false);
+            return;
+        }
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(replace ? R.string.plugin_import_replace : R.string.plugin_import_confirm)
+                .setMessage(TextUtils.join("\n\n", warnings))
+                .setPositiveButton(replace ? R.string.plugin_import_replace
+                                : R.string.plugin_import_continue,
+                        (dialog, which) -> startInstall(picked, replace))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void startInstall(Uri picked, boolean replace) {
+        snack(getString(R.string.plugin_import_running));
+        importExecutor.execute(() -> {
+            File installed = null;
+            CharSequence failure = null;
+            try {
+                installed = PluginStore.install(this, picked, replace);
+            } catch (IOException error) {
+                failure = getString(R.string.plugin_import_failed, error.getMessage());
+            }
+            final File result = installed;
+            final CharSequence problem = failure;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (problem != null) {
+                    snack(problem);
+                    return;
+                }
+                broadcastReloadPlugins();
+                snack(getString(R.string.plugin_imported, pluginLabel(manifestInfo(result)[0])));
+                rebuildDetail();
+            });
+        });
+    }
+
+    /** Tells the running input service to rescan the plugin directory. */
+    private void broadcastReloadPlugins() {
+        final Intent intent = new Intent(PimeImeService.ACTION_RELOAD_PLUGINS);
+        intent.setPackage(getPackageName());
+        sendBroadcast(intent);
     }
 
     private void importChain(Uri uri) {
@@ -1578,5 +1678,32 @@ public final class SettingsActivity extends AppCompatActivity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    /**
+     * Downloads, where a plugin .zip usually lands. The picker takes this as a
+     * hint and falls back to its own default when it cannot resolve it.
+     */
+    private static Uri downloadsUri() {
+        if (Build.VERSION.SDK_INT < 26) return null;
+        return android.provider.DocumentsContract.buildDocumentUri(
+                "com.android.externalstorage.documents", "primary:Download");
+    }
+
+    /**
+     * OpenDocument that starts in Downloads: that is where a plugin .zip lands,
+     * and the picker otherwise opens wherever it was last left.
+     */
+    private static final class OpenDocumentInDownloads
+            extends ActivityResultContracts.OpenDocument {
+        @Override
+        public Intent createIntent(Context context, String[] input) {
+            final Intent intent = super.createIntent(context, input);
+            if (Build.VERSION.SDK_INT >= 26) {
+                intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                        downloadsUri());
+            }
+            return intent;
+        }
     }
 }

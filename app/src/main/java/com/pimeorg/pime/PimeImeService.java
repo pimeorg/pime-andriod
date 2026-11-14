@@ -59,6 +59,8 @@ public final class PimeImeService extends InputMethodService
 
     /** Local action: the settings page edited a chain and wants the kernel rebuilt. */
     public static final String ACTION_REBUILD_CHAIN = "com.pimeorg.pime.action.REBUILD_CHAIN";
+    /** Local action: the settings page installed a plugin package. */
+    public static final String ACTION_RELOAD_PLUGINS = "com.pimeorg.pime.action.RELOAD_PLUGINS";
 
     private static final int TOP_BAR_HEIGHT_DP = 44;
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
@@ -67,6 +69,7 @@ public final class PimeImeService extends InputMethodService
 
     private PimeCore core;
     private boolean coreReady;
+    private File pluginDir;
     private KeyboardView keyboard;
     private LinearLayout candidateBar;
     private HorizontalScrollView candidateScroll;
@@ -79,7 +82,7 @@ public final class PimeImeService extends InputMethodService
     public void onCreate() {
         super.onCreate();
         final File files = getFilesDir();
-        final File pluginDir = new File(files, "plugins");
+        pluginDir = new File(files, "plugins");
         final File dataDir = new File(files, "data");
         final File trustDir = new File(files, "trust");
         final File chainDir = new File(files, "chains");
@@ -144,10 +147,16 @@ public final class PimeImeService extends InputMethodService
         rebuildReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
+                // A newly installed package has to be loaded before the chain
+                // that references it can be built.
+                if (ACTION_RELOAD_PLUGINS.equals(intent.getAction())) {
+                    loadPlugins(pluginDir);
+                }
                 rebuildActiveChain();
             }
         };
         final IntentFilter filter = new IntentFilter(ACTION_REBUILD_CHAIN);
+        filter.addAction(ACTION_RELOAD_PLUGINS);
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             registerReceiver(rebuildReceiver, filter,
                     Context.RECEIVER_NOT_EXPORTED);

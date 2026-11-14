@@ -81,6 +81,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 已存在的目录不会覆盖：更新 APK 里的插件包后需要清除应用数据（或手动替换
 `files/plugins/`）才会生效。
 
+装随包分发之外的插件不必再 `adb push`：设置页「插件与链 → 插件包」里有
+「导入插件包」（选一个插件包的 `.zip`，允许带一层顶层目录）与「从文件夹导入」
+（选一个已是插件包的目录）。导入会校验 `manifest.yaml` 与 `plugin.wasm`、按
+`pime-plugin-<id>-<version>` 原子落盘，并让运行中的输入服务重扫插件目录。
+
 ## 运行时约定
 
 - core 以 `PIME_FLAG_ALLOW_INSECURE` 启动：未签名插件包可加载，签名校验仍按 core 规则执行。

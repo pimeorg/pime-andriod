@@ -56,7 +56,7 @@
     <string name="row_handwriting">数据来源</string>
     <string name="row_license">许可证</string>
     <string name="plugins_count_value">%1$d 个</string>
-    <string name="plugins_note">插件包只在首次启动时从 APK 复制到应用目录。重装 APK 不会覆盖已有插件；更新插件需清除应用数据（adb shell pm clear com.pimeorg.pime）或提升插件版本号。</string>
+    <string name="plugins_note">随 APK 分发的插件包只在首次启动时复制到应用目录，重装 APK 不会覆盖已有插件。要装别的插件，用上面的「导入插件包」；导入后的开关在「未启用插件」里，打开即加入当前链。</string>
     <string name="storage_plugins_desc">完整插件包所在目录</string>
     <string name="storage_chains_desc">链配置所在目录</string>
     <string name="storage_note">应用数据位于内部存储，卸载应用即删除。debug 包与 release 包共用同一份数据目录。</string>
@@ -148,6 +148,27 @@
     <string name="settings_int_invalid">请输入 0 以上的整数</string>
     <string name="plugin_section_note">点按插件行可展开它的设置。顺序即处理顺序：按键先经过上面的插件，再交给下面的。</string>
     <string name="import_no_file">未选择文件</string>
+
+    <!-- plugins page: installing packages -->
+    <string name="action_import_plugin">导入插件包</string>
+    <string name="action_import_plugin_desc">选择插件的 .zip 压缩包</string>
+    <string name="action_import_folder">从文件夹导入</string>
+    <string name="action_import_folder_desc">选择含 manifest.yaml 与 plugin.wasm 的文件夹</string>
+    <string name="plugin_imported">已导入插件：%1$s</string>
+    <string name="plugin_import_failed">导入失败：%1$s</string>
+    <string name="plugin_import_running">正在导入插件…</string>
+    <string name="plugin_import_exists">%1$s 已存在，是否覆盖？</string>
+    <string name="plugin_import_replace">覆盖</string>
+    <string name="plugin_import_confirm">确认导入</string>
+    <string name="plugin_import_continue">继续</string>
+    <string name="plugin_import_platform">清单没有声明 %1$s，core 可能拒绝加载这个插件。</string>
+    <string name="plugin_import_bad">不是有效的 .zip 插件包</string>
+    <string name="plugin_import_no_manifest">找不到 manifest.yaml</string>
+    <string name="plugin_import_no_entry">缺少插件模块 plugin.wasm / plugin.lua</string>
+    <string name="plugin_import_bad_id">清单缺少 id 或 version</string>
+    <string name="plugin_import_unsafe">插件包里有非法路径</string>
+    <string name="plugin_import_too_big">插件包超过大小上限</string>
+    <string name="plugin_import_io">读写插件包失败</string>
 
     <!-- friendly names for known plugin ids; unknown ids fall back to the raw id -->
     <string name="plugin_label_keymap">按键映射</string>

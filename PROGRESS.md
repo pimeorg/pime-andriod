@@ -201,6 +201,45 @@ Components 的原生 View，保持 `SettingsActivity` 单文件、无状态层�
 - `ChainStore` 增加 `renameChain`（重命名时若重命名的是活动链，同步更新
   `Prefs.activeChain`）与 `displayName`（去掉扩展名）。
 
+### 插件包导入
+
+上一轮把链的增删改补齐后，用户随即指出：“只有导入链，没有导入插件的方法”。
+在此之前装插件只有两条路：随 APK 的 `assets/plugins/` 首次启动复制，或
+`adb push` 到 `files/plugins/`。页面上确实缺一个“把插件包拿进来”的入口。
+
+插件包在 core 里就是一个**目录**（`manifest.yaml` + `plugin.wasm|lua` + 资产，
+可选 `SIGNATURE`），没有归档格式（`pimepack` 也是复制目录）。Android 的文件
+选择器只能给单个文件或一整棵树，所以两种来源都支持：
+
+- **导入插件包**：`OpenDocument` 选一个 `.zip`，解开后安装。zip 里允许带一层
+  顶层目录（`pime-plugin-x-1.0.0/manifest.yaml` 与 `manifest.yaml` 平铺都认），
+  解压时会剥掉这层前缀；`__MACOSX/`、`.DS_Store` 之类的垃圾条目跳过。
+- **从文件夹导入**：`OpenDocumentTree` 选一个已是插件包的目录，递归复制。
+  每次选择器都从 Download 开始（`EXTRA_INITIAL_URI`），插件包通常先落到那里。
+
+安装逻辑收在 `PluginStore`：
+
+- 先只读 `manifest.yaml`（zip 走一遍条目名，目录读根下那一个），校验存在
+  `id` / `version`、且包里有 `plugin.wasm|lua|dll|so|dylib` 之一；不通过就在
+  写盘之前用 Snackbar 说明原因（「找不到 manifest.yaml」「缺少插件模块」…）。
+- 目标目录名取清单里的 `pime-plugin-<id>-<version>`，与随包分发的命名一致，
+  同名同版本即可天然识别为“已安装”，不同版本可以并存。
+- 复制先落到 `files/plugins/.import-<纳秒>`，整包写完再 `rename` 到目标名，
+  半截的包不会被加载器看到；失败或已存在时清理 staging。
+- 覆盖同名包时，连带删掉 core 自己装的那份 `<id>/<version>/`：同版本换了内容
+  是新 code hash，core 会以 `CORRUPT` 拒绝覆盖，留着旧副本只会让新包加载不上。
+  父目录空了也一并删掉。
+- 路径安全：条目名或目录名里出现绝对路径、`\`、`:`、`.`、`..` 一律拒绝
+  （core 也要求“路径不得越出包根”），单文件 64 MB、整包 512 MB 封顶。
+- 清单没声明本机 ABI（`android-x64` / `android-arm64`）时，导入前弹确认框说明
+  “core 可能拒绝加载”——这不是洁癖，本项目早期就踩过一次清单缺 `android-x64`
+  导致模拟器上插件全部 `NOT_FOUND`。
+
+导入完成后发 `PimeImeService.ACTION_RELOAD_PLUGINS`：正在跑的输入服务收到后
+重扫 `files/plugins` 再重建当前链，所以新插件立刻可用，不需要重启输入法或
+清应用数据。随后页面重建，新包出现在「未启用插件」里，打开开关即加入当前链。
+复制在单线程 executor 上做，页面不会被大包卡住。
+
 ### 输入视图（键盘与候选）
 
 在 MuMu 12 上看过 PIME 设置页与真机键盘后，用户提出“输入法的输入 UI 你好歹学学
@@ -428,6 +467,29 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
     正常。
   - 回归：`pm clear` 后用 PIME 键盘实测输入，组合串与候选正常出现
     （`nijao` → 你骄傲…），点首位候选提交成功；链文件格式与宿主输入路径未受影响。
+- **插件包导入实测（2026-11-14）**：用脚本造了几个测试包（复制第一方
+  candidates-format 的 `plugin.wasm`，只改清单里的 `id` / `role`），推到
+  `/sdcard/Download` 后从页面导入：
+  - `pime-test-format.zip`（带一层顶层目录）→ `files/plugins/pime-plugin-pime-test-format-1.0.0/`
+    下正好是 `manifest.yaml` + `plugin.wasm`（前缀已剥离），无 `.import-*` 残留。
+  - 同一份清单的平铺 zip：识别为同名包，弹「覆盖」确认框，确认后目录内容改写、
+    core 自己的 `<id>/<version>/` 旧副本被删、空掉的父目录也删掉。
+  - 清单只声明 `android-arm64` 的包：导入前弹「确认导入 / 清单没有声明
+    android-x64，core 可能拒绝加载这个插件」，点「继续」后确实装入，logcat 随即
+    给出 `plugin pime-plugin-pime-test-arm-1.0.0: NOT_FOUND`——警告与实际一致。
+  - 选一个内容是文本的 `.zip`：Snackbar「导入失败：找不到 manifest.yaml」，
+    不落任何文件。
+  - **热加载**：输入服务活着时（pid 不变）导入，logcat 立刻出现新包的
+    `plugin loaded: …` 与 `chain rebuilt: default.cbor`，说明
+    `ACTION_RELOAD_PLUGINS` 走通，不用重启输入法或 `pm clear`。
+  - **文件夹导入**：`OpenDocumentTree` 从 Download 打开，Android 15 不允许直接
+    选 Download 根（“无法使用此文件夹”），进子目录 `pime-folder` 后
+    「使用此文件夹」→「允许」，生成 `pime-plugin-pime-test-folder-1.0.0`。
+  - 导入的包按预期出现在「未启用插件」，打开开关后解码链文件确认被追加到链尾；
+    首页摘要同步变成「6 个插件包 · 链 default」。
+  - 首页试输入框在 PIME 不是当前输入法时，本轮仍无法在 MuMu 上自动唤起软键盘：
+    `ime set` 会被 MuMu 改回微信输入法，须走系统输入法选择器点「中文 / 英文」
+    才真正切到 PIME（此后 `mCurId` 与 logcat 的 `pime-core 1.0.0` 都正常）。
 - **测试注意（本轮新增）**：MuMu 12 上 `ime set` 会被系统改回微信输入法
   （`com.tencent.wetype`），需要每次重设；用 `adb shell input text` 往对话框输入
   时，若软键盘是被测输入法且处于联想模式，字符会停在输入法的候选条里而不落进
@@ -456,7 +518,11 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
 - 插件的中文名/设置项中文名是硬编码映射（`SettingsActivity.pluginLabel` /
   `settingLabel`），第三方插件只能显示原始 id 与键名。
 - 插件包只在首次启动时从 `assets/` 复制到 `files/plugins/`；`adb install -r`
-  保留应用数据，因此重装 APK 不会更新插件。实测新插件需先
-  `adb shell pm clear dev.pime.ime`（会清空设置），或提升插件版本号让目录名
-  变化。
+  保留应用数据，因此重装 APK 不会更新插件；随包插件的更新仍要靠
+  `pm clear`（会清空设置）或提升插件版本号。第三方/新插件则可以用页面上的
+  「导入插件包」装进来，不必再 `adb push`。
+- 页面只能导入、不能卸载插件包（`files/plugins` 下的目录要手动删）。导入后的
+  包是否有 core 能加载，宿主并不知道：只有清单缺本机 ABI 时会在导入前提醒一句，
+  其它拒绝（签名、依赖、ABI major）要等 core 报 `NOT_FOUND` / `CORRUPT`，
+  而这类包在「未启用插件」里看起来和正常包一样。
 - 未使用 `pime_core_touch`（手写输入 UI 未实现）。
