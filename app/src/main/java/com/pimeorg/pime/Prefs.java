@@ -128,4 +128,17 @@ public final class Prefs {
     public static void setBundledStamp(Context context, long value) {
         prefs(context).edit().putLong("bundled_stamp", value).apply();
     }
+
+    /**
+     * SHA-256 of the bundled chain this app last wrote as {@code name}. A chain
+     * whose file no longer matches it was edited by the user and must survive
+     * upgrades; {@code null} means the build predates this bookkeeping.
+     */
+    public static String chainBaseline(Context context, String name) {
+        return prefs(context).getString("chain_baseline/" + name, null);
+    }
+
+    public static void setChainBaseline(Context context, String name, String hash) {
+        prefs(context).edit().putString("chain_baseline/" + name, hash).apply();
+    }
 }

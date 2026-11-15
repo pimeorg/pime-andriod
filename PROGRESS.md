@@ -803,3 +803,37 @@ translate 插件就失败：按 `a` 时 logcat 是 `key 97: NOT_FOUND`，字段�
   `dianhua` → 电话（简体）；logcat 不再出现 `NOT_FOUND`；设备上
   `files/plugins/pime-pinyin-translate/1.2.2/assets/` 已含
   `pinyin.collocations`，`pime-predict-context/1.1.0/assets/` 已含两个 TSV。
+
+## 中英混输与候选翻页（2026-11-15）
+
+用户：“中英混合输入现在缺乏这个能力，比如：我在中文状态下输入明显是英文的东西，
+比如 `goo`，就要意识到 good、google…，当然，这并不意味着没有中文候选。”
+
+### 链
+
+- `tools/chains/android-pinyin.yaml` 加入 `pime-english-translate 1.0.2`
+  （`max_candidates: 16`，排在所有中文候选源之后），同步
+  `pinyin-parse 1.1.4`（新增 `complete`）、`pinyin-rank 1.2.1`（合并视图不
+  学习）、`candidates-format 1.3.3`（英文合并视图优先于中文源）。
+  重出 `default.cbor` / `english.cbor`，打包 1.1.4 / 1.0.2 / 1.2.1 / 1.3.3。
+
+### 宿主
+
+- 内置**链**也随 APK 升级刷新：`Prefs.chainBaseline` 记录上次写入的 SHA-256，
+  只在文件仍等于 baseline（用户没编辑过）时替换；从没有 baseline 的旧版本升级
+  时先写一份 `<name>.cbor.bak` 再替换。插件包仍按 `lastUpdateTime` 整包重拷。
+- 候选栏 `CandidateStrip`：页宽于屏幕时横向滚动；滚到头、或本来就放得下时，
+  横向滑动翻页（给链发 `PageDown/PageUp = 34/33`）。此前链每页只给 5 条，
+  第 6 条之后（包括合并视图里的中文）永远看不到。
+- 候选点击从 `candidate {index}` 改为数字选词：翻页后窗口里的下标只是页内
+  序号，而链的 `digit` 动作会按 format 自己的页码换算绝对下标。
+
+### 实测（MuMu 12 / Android 15 / x86_64）
+
+- `goo` → 第一页 `goo good goods 够 工`；左滑 → `共 购 公 供 功`；再左滑进入
+  其余英文补全（`goodbye goose goody…`）；右滑回上一页。
+- 点第 1 页 `good` 提交 `good`；翻到第 2 页点 `共` 提交 `共`（不再误提交 `goo`）。
+- 空格提交原码 `goo`，与英文链“原码优先”一致。
+- 纯拼音 `nihao` 等不受影响（`complete=true` 时不查英文词表）。
+- 插件侧 281 条用例全过、conformance ok；APK 升级后 `files/chains/default.cbor`
+  自动换成新链，无需清除应用数据。

@@ -1,24 +1,81 @@
 api: 1
 id: android-pinyin
-description: Android 全拼链（仅 WASM 插件，无 Lua 运行时）
+description: Android 默认中文链（仅 WASM 插件，含中英混输）
 core: ">=1.0.0"
 
 plugins:
-  - { id: pime-keymap-default, role: preprocess }
-  - { id: pime-pinyin-parse, role: parse }
-  - { id: pime-pinyin-translate, role: translate, settings: { max_candidates: 8 } }
-  - { id: pime-pinyin-rank, role: rank }
-  - { id: pime-candidates-format, role: format, settings: { page_size: 5 } }
+  - { id: pime-keymap-default, role: preprocess, version: 1.2.0 }
+  - { id: pime-pinyin-parse, role: parse, version: 1.1.4 }
+  - { id: pime-shape-parse, role: parse, version: 1.0.0 }
+  - { id: pime-pinyin-translate, role: translate, version: 1.2.2,
+      settings: { max_candidates: 8 } }
+  - { id: pime-pinyin-rank, role: rank, version: 1.2.1,
+      settings: { page_size: 5 } }
+  - { id: pime-special-candidates, role: translate, version: 1.0.0 }
+  - { id: pime-shortcuts, role: translate, version: 1.0.0 }
+  - { id: pime-hans-hant, role: translate, version: 1.0.0 }
+  - { id: pime-shape-translate, role: translate, version: 1.0.0 }
+  # Mixed view: Chinese candidates plus English completions for English-looking
+  # input (`goo` -> good/Google). Must run after every Chinese source.
+  - { id: pime-english-translate, role: translate, version: 1.0.2,
+      settings: { max_candidates: 16 } }
+  - { id: pime-emoji-suggest, role: predict, version: 1.0.0 }
+  - { id: pime-clip-code, role: predict, version: 1.0.0 }
+  - { id: pime-candidates-format, role: format, version: 1.3.3,
+      settings: { page_size: 5 } }
+  - { id: pime-learn-user-dict, role: learn, version: 1.0.0 }
+  - { id: pime-predict-context, role: predict, version: 1.1.0 }
+  - { id: pime-app-mode, role: learn, version: 1.0.0 }
+  - { id: pime-dict-packs, role: service, version: 1.0.0 }
+  - { id: pime-personal-merge, role: service, version: 1.0.0 }
+  - { id: pime-model-manager, role: service, version: 1.0.0 }
 
 workspace:
   - { key: plugin/pime-keymap-default/action,
       from: pime-keymap-default, to: [pime-pinyin-parse] }
   - { key: plugin/pime-pinyin-parse/raw,
       from: pime-pinyin-parse,
-      to: [pime-pinyin-translate, pime-candidates-format] }
+      to: [pime-pinyin-translate, pime-special-candidates, pime-shortcuts,
+            pime-english-translate, pime-candidates-format] }
+  - { key: plugin/pime-pinyin-parse/complete,
+      from: pime-pinyin-parse, to: [pime-english-translate] }
   - { key: plugin/pime-pinyin-parse/syllables,
       from: pime-pinyin-parse, to: [pime-pinyin-translate] }
   - { key: plugin/pime-pinyin-translate/candidates,
       from: pime-pinyin-translate, to: [pime-pinyin-rank] }
   - { key: plugin/pime-pinyin-rank/candidates,
-      from: pime-pinyin-rank, to: [pime-candidates-format] }
+      from: pime-pinyin-rank,
+      to: [pime-special-candidates, pime-shortcuts, pime-hans-hant,
+            pime-shape-translate, pime-english-translate,
+            pime-candidates-format] }
+  - { key: plugin/pime-special-candidates/candidates,
+      from: pime-special-candidates,
+      to: [pime-shortcuts, pime-hans-hant, pime-shape-translate,
+            pime-english-translate, pime-candidates-format] }
+  - { key: plugin/pime-shortcuts/candidates,
+      from: pime-shortcuts,
+      to: [pime-hans-hant, pime-shape-translate, pime-english-translate,
+            pime-candidates-format] }
+  - { key: plugin/pime-hans-hant/candidates,
+      from: pime-hans-hant,
+      to: [pime-shape-translate, pime-english-translate,
+            pime-candidates-format] }
+  - { key: plugin/pime-shape-translate/candidates,
+      from: pime-shape-translate,
+      to: [pime-english-translate, pime-candidates-format] }
+  - { key: plugin/pime-english-translate/candidates,
+      from: pime-english-translate, to: [pime-candidates-format] }
+  - { key: plugin/pime-emoji-suggest/candidates,
+      from: pime-emoji-suggest, to: [pime-candidates-format] }
+  - { key: plugin/pime-clip-code/candidates,
+      from: pime-clip-code, to: [pime-candidates-format] }
+  - { key: plugin/pime-shape-parse/mode,
+      from: pime-shape-parse, to: [pime-shape-translate] }
+  - { key: plugin/pime-shape-parse/code,
+      from: pime-shape-parse, to: [pime-shape-translate] }
+  - { key: plugin/pime-candidates-format/committed,
+      from: pime-candidates-format, to: [pime-learn-user-dict] }
+  - { key: plugin/pime-learn-user-dict/next,
+      from: pime-learn-user-dict, to: [pime-predict-context] }
+  - { key: plugin/pime-learn-user-dict/last,
+      from: pime-learn-user-dict, to: [pime-predict-context] }

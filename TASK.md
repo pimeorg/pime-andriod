@@ -126,3 +126,10 @@
 - [x] 构建期 `checkBundledPluginAssets`：manifest 声明的资产缺一即失败
 - [x] `pime-hans-hant` 默认关闭，中文候选不再默认变繁体
 - [x] MuMu 实测 `nihao` → 你好、`dianhua` → 电话，logcat 无 `NOT_FOUND`
+- [x] 中英混输：中文链挂 `pime-english-translate 1.0.2`，`goo` → 原码/补全 +
+      中文候选合并视图；纯拼音与简拼不混入
+- [x] 候选栏翻页 `CandidateStrip`：内容滚到头或放得下时横滑翻页（PageDown/Up），
+      合并视图的中文候选与后续英文补全都能翻到
+- [x] 候选点击改用数字选词，翻页后第 2 页候选不再提交成第 1 页的候选
+- [x] 内置链随 APK 升级刷新（baseline 哈希；旧版本首次升级先留 `.cbor.bak`）
+- [x] MuMu 实测 `goo` 混输视图、左右翻页、第 2 页选字提交、空格提交原码

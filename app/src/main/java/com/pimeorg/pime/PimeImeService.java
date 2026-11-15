@@ -20,7 +20,9 @@ import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -84,7 +86,7 @@ public final class PimeImeService extends InputMethodService
     private KeyboardTheme inputPalette;
     private LinearLayout candidateRow;
     private LinearLayout candidateBar;
-    private HorizontalScrollView candidateScroll;
+    private CandidateStrip candidateScroll;
     private TextView compositionView;
     private String composition = "";
     /** Syllable bounds in the composition, in UTF-16 units; empty when unknown. */
@@ -277,14 +279,19 @@ public final class PimeImeService extends InputMethodService
         candidateRow.addView(compositionView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(COMPOSITION_ROW_HEIGHT_DP)));
 
-        candidateScroll = new HorizontalScrollView(this);
+        candidateScroll = new CandidateStrip(this, next -> {
+            if (!candidates.isEmpty()) pageCandidates(next ? 34 : 33);
+        });
         candidateScroll.setHorizontalScrollBarEnabled(false);
         candidateScroll.setFillViewport(true);
         candidateBar = new LinearLayout(this);
         candidateBar.setOrientation(LinearLayout.HORIZONTAL);
         candidateBar.setGravity(Gravity.CENTER_VERTICAL);
+        /* WRAP_CONTENT, not MATCH_PARENT: the mixed Chinese/English view can
+         * be wider than the screen, and a viewport-wide bar has no scroll
+         * range to drag. */
         candidateScroll.addView(candidateBar, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         candidateScroll.setVisibility(View.GONE);
         candidateRow.addView(candidateScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(CANDIDATE_ROW_HEIGHT_DP)));
@@ -603,11 +610,27 @@ public final class PimeImeService extends InputMethodService
         return Character.toUpperCase(value);
     }
 
+    /**
+     * A tap picks by digit, not by candidate index: the chain pages its list,
+     * so {@code index} is only the slot on the page currently shown, while the
+     * digit is resolved against the page the format plugin believes it is on.
+     */
     private void selectCandidate(int index) {
         if (!coreReady || !core.hasSession()) return;
-        final int status = core.selectCandidate(index);
-        if (status != 0) Log.w(TAG, "candidate " + index + ": " + text(status));
+        final char digit = (char) ('1' + index);
+        final int status = core.key(digit, 0, PimeCore.KEY_DOWN,
+                String.valueOf(digit));
         core.pump();
+        if (status < 0) Log.w(TAG, "candidate " + index + ": " + text(-status));
+    }
+
+    private void pageCandidates(int keyCode) {
+        if (!coreReady || !core.hasSession()) return;
+        final int status = core.key(keyCode, 0, PimeCore.KEY_DOWN, null);
+        core.pump();
+        if (status < 0) {
+            Log.w(TAG, "page " + keyCode + ": " + core.statusString(-status));
+        }
     }
 
     /* PimeCore.Listener */
@@ -684,6 +707,8 @@ public final class PimeImeService extends InputMethodService
         for (int i = 0; i < count; ++i) {
             candidateBar.addView(candidateItem(items[i], i, palette));
         }
+        /* Every new page starts at its first candidate. */
+        candidateScroll.scrollTo(0, 0);
         candidateScroll.setVisibility(View.VISIBLE);
         updateCandidateRow();
     }
@@ -791,8 +816,9 @@ public final class PimeImeService extends InputMethodService
      * <p>Bundled plugin packages are refreshed whenever the APK changes: an
      * upgrade may fix a package (assets, manifest) on an existing install, and
      * a same-version rebuild would otherwise stay invisible because core's
-     * own installed copy refuses a different code hash. Chains keep the
-     * "copy only when missing" rule so user edits survive upgrades.
+     * own installed copy refuses a different code hash. Bundled chains refresh
+     * too, but only while they still match what this app last wrote, so user
+     * edits survive upgrades.
      */
     private void installBundled(File pluginDir, File chainDir) {
         final AssetManager assets = getAssets();
@@ -809,16 +835,82 @@ public final class PimeImeService extends InputMethodService
                 }
                 copyAssetTree("plugins/" + name, target);
             }
-            for (String name : assets.list("chains")) {
-                if (!name.endsWith(".cbor")) continue;
-                final File target = new File(chainDir, name);
-                if (!target.exists()) copyAssetTree("chains/" + name, target);
-            }
+            syncBundledChains(chainDir, refresh);
         } catch (IOException error) {
             complete = false;
             Log.w(TAG, "bundled assets unavailable", error);
         }
         if (complete && refresh) Prefs.setBundledStamp(this, stamp);
+    }
+
+    /**
+     * Installs the bundled chains, replacing an upgrade's stale copy unless the
+     * user edited it. A chain from a build without baselines cannot be checked,
+     * so its old content is kept as {@code <name>.bak} before the refresh.
+     */
+    private void syncBundledChains(File chainDir, boolean refresh)
+            throws IOException {
+        for (String name : getAssets().list("chains")) {
+            if (!name.endsWith(".cbor")) continue;
+            final File target = new File(chainDir, name);
+            final byte[] bundled = readAssetBytes("chains/" + name);
+            final String bundledHash = sha256(bundled);
+            if (!target.exists()) {
+                copyAssetTree("chains/" + name, target);
+                Prefs.setChainBaseline(this, name, bundledHash);
+                continue;
+            }
+            if (!refresh) continue;
+            final byte[] current = readBytes(target);
+            if (current == null) continue;
+            final String baseline = Prefs.chainBaseline(this, name);
+            if (baseline != null && !baseline.equals(sha256(current))) continue;
+            if (Arrays.equals(bundled, current)) {
+                Prefs.setChainBaseline(this, name, bundledHash);
+                continue;
+            }
+            if (baseline == null) writeFile(new File(chainDir, name + ".bak"),
+                    current);
+            copyAssetTree("chains/" + name, target);
+            Prefs.setChainBaseline(this, name, bundledHash);
+        }
+    }
+
+    private static String sha256(byte[] data) {
+        try {
+            final byte[] hash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(data);
+            final StringBuilder text = new StringBuilder(hash.length * 2);
+            for (byte value : hash) {
+                text.append(Character.forDigit((value >> 4) & 0xf, 16));
+                text.append(Character.forDigit(value & 0xf, 16));
+            }
+            return text.toString();
+        } catch (java.security.NoSuchAlgorithmException error) {
+            return "";
+        }
+    }
+
+    private static void writeFile(File target, byte[] data) throws IOException {
+        final File parent = target.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            throw new IOException("mkdir " + parent);
+        }
+        try (FileOutputStream output = new FileOutputStream(target)) {
+            output.write(data);
+        }
+    }
+
+    private byte[] readAssetBytes(String assetPath) throws IOException {
+        try (InputStream input = getAssets().open(assetPath)) {
+            final ByteArrayOutputStream output = new ByteArrayOutputStream();
+            final byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) > 0) {
+                output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
+        }
     }
 
     /** The APK's last update time, used as the bundled-package sync stamp. */
@@ -948,5 +1040,79 @@ public final class PimeImeService extends InputMethodService
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    /**
+     * Candidate strip: scrolls horizontally while the page is wider than the
+     * screen, and turns a swipe into a page request at the edge (or whenever
+     * there is nothing to scroll). A chain page holds only page_size
+     * candidates, so without paging the sixth candidate — e.g. the Chinese
+     * half of a mixed view — would be unreachable.
+     */
+    private static final class CandidateStrip extends HorizontalScrollView {
+        interface Pager {
+            /** {@code next} is true when the user swiped towards later pages. */
+            void page(boolean next);
+        }
+
+        private final Pager pager;
+        private final int slop;
+        private float downX;
+        private float downY;
+        private boolean paging;
+
+        CandidateStrip(Context context, Pager pager) {
+            super(context);
+            this.pager = pager;
+            this.slop = ViewConfiguration.get(context).getScaledTouchSlop();
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent event) {
+            final int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                downX = event.getX();
+                downY = event.getY();
+                paging = false;
+            } else if (action == MotionEvent.ACTION_MOVE && !paging
+                    && startsPage(event)) {
+                paging = true;
+                return true;
+            }
+            return super.onInterceptTouchEvent(event);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            final int action = event.getActionMasked();
+            if (paging) {
+                if (action == MotionEvent.ACTION_UP) {
+                    paging = false;
+                    pager.page(downX > event.getX());
+                } else if (action == MotionEvent.ACTION_CANCEL) {
+                    paging = false;
+                }
+                return true;
+            }
+            /* No item took the touch (the blank tail of the strip): keep the
+             * same bookkeeping here, or the scroll view would swallow a swipe
+             * that has nothing left to scroll. */
+            if (action == MotionEvent.ACTION_DOWN) {
+                downX = event.getX();
+                downY = event.getY();
+            } else if (action == MotionEvent.ACTION_MOVE && startsPage(event)) {
+                paging = true;
+                return true;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        /** True when this move begins a horizontal swipe the strip cannot scroll. */
+        private boolean startsPage(MotionEvent event) {
+            final float dx = event.getX() - downX;
+            final float dy = event.getY() - downY;
+            if (Math.abs(dx) <= slop || Math.abs(dx) <= Math.abs(dy)) return false;
+            return !canScrollHorizontally(dx < 0 ? 1 : -1);
+        }
     }
 }
