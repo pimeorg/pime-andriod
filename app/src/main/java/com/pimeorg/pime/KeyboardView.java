@@ -57,6 +57,13 @@ public final class KeyboardView extends View {
 
     public interface Listener {
         void onKey(Key key);
+
+        /**
+         * The visible key page changed. The host mirrors it on the toolbar, so
+         * a tap on the toolbar and the in-keyboard page keys stay in sync.
+         */
+        default void onPageChanged(boolean symbols) {
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -116,6 +123,24 @@ public final class KeyboardView extends View {
 
     public boolean isShiftDown() {
         return shift;
+    }
+
+    /** True while the symbols page is showing; the toolbar highlights this. */
+    public boolean isSymbolPage() {
+        return page == PAGE_SYMBOLS;
+    }
+
+    /** Switches between the letter and symbol pages (toolbar tool). */
+    public void togglePage() {
+        setPage(page == PAGE_LETTERS ? PAGE_SYMBOLS : PAGE_LETTERS);
+    }
+
+    private void setPage(int next) {
+        if (page == next) return;
+        page = next;
+        layoutKeys(getWidth(), getHeight());
+        invalidate();
+        if (listener != null) listener.onPageChanged(page == PAGE_SYMBOLS);
     }
 
     private void buildPages() {
@@ -415,9 +440,7 @@ public final class KeyboardView extends View {
         }
         if (key.kind == KIND_SYMBOLS || key.kind == KIND_LETTERS) {
             feedback();
-            page = key.kind == KIND_SYMBOLS ? PAGE_SYMBOLS : PAGE_LETTERS;
-            layoutKeys(getWidth(), getHeight());
-            invalidate();
+            setPage(key.kind == KIND_SYMBOLS ? PAGE_SYMBOLS : PAGE_LETTERS);
             return;
         }
         feedback();

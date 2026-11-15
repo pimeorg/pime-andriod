@@ -15,16 +15,17 @@ pime-core 的 Android 宿主外壳。它是一个标准输入法（IME），只�
 pime-android/
 ├── app/src/main/AndroidManifest.xml      IME service + 启动器 Activity
 ├── app/src/main/res/xml/method.xml       input-method 元数据
-├── app/src/main/java/dev/pime/ime/
+├── app/src/main/java/com/pimeorg/pime/
 │   ├── PimeImeService.java               InputMethodService：core 生命周期与 HAL sink
 │   ├── PimeCore.java                     JNI 封装
 │   ├── KeyboardView.java                 软键盘视图（只上报按键）
-│   └── SettingsActivity.java             启用/切换输入法
+│   ├── ImeToolbar.java                   顶栏工具栏（页切换、粘贴、设置、收起）
+│   └── SettingsActivity.java             启用/切换输入法与宿主偏好
 ├── app/src/main/cpp/
 │   ├── CMakeLists.txt                    add_subdirectory(pime-core) + vmlib + pime_jni
 │   └── pime_jni.cpp                      C ABI ↔ JNI，无输入逻辑
 ├── app/src/main/assets/
-│   ├── plugins/                          随包发布的 WASM 插件包（五个）
+│   ├── plugins/                          随包发布的 WASM 插件包（18 个）
 │   └── chains/default.cbor               默认链
 ├── third_party/wamr/                     WAMR 2.4.1 源码（core 的 WASM 后端）
 ├── TASK.md / PROGRESS.md
@@ -98,6 +99,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   ART 的 `PROT_NONE` 守卫页内，否则 `wasm_runtime_init` 会崩溃。
 - 插件清单必须包含当前平台标识；x86_64 模拟器对应 `android-x64`。
 - 空链（`{"plugins": []}`）合法：所有按键返回 unhandled，由 Java 层交给编辑器。
+- 顶栏工具栏只做宿主动作：页切换、粘贴剪贴板纯文本、打开设置、收起键盘；
+  粘贴在组合中会先结束组合并清掉候选，避免 `commitText` 顶掉正在输入的内容。
+  主题或键盘高度变化时设置页广播 `ACTION_DISPLAY_CHANGED`，运行中的输入服务
+  重建输入视图并保留组合串与候选。
 - `onStartInput` 设置上下文（app_id、field_type、locale=zh_CN、page_size=20、
   `CANDIDATES|TOUCH|SECURE`），密码框同时置 secure。
 - `onFinishInput` 复位并取消焦点；会话在 `onDestroy` 释放。
@@ -111,7 +116,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 只有 debug 签名；release 签名与混淆未配置。
 - 未在 arm64 物理设备上验证；已在 MuMu 12（Android 15 / API 35 / x86_64）上
   跑通插件加载、`nihao → 你好` 候选与提交。
-- 软键盘布局为首批最小集（字母、数字、Shift、退格、空格、回车、逗号、句点）。
+- 软键盘布局为字母/符号两页（字母、数字、Shift、退格、空格、回车、标点）。
+  顶栏是工具栏：字母/符号页切换、粘贴、键盘设置、收起；组合串与候选共用
+  工具栏下方的一行，没有组合与候选时该行隐藏。
 
 ## 对 pime-core 的改动
 

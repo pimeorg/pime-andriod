@@ -24,8 +24,6 @@ import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.HorizontalScrollView;
-import android.widget.ImageButton;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -62,6 +60,8 @@ public final class PimeImeService extends InputMethodService
     public static final String ACTION_REBUILD_CHAIN = "com.pimeorg.pime.action.REBUILD_CHAIN";
     /** Local action: the settings page installed a plugin package. */
     public static final String ACTION_RELOAD_PLUGINS = "com.pimeorg.pime.action.RELOAD_PLUGINS";
+    /** Local action: display preferences changed; rebuild the input view. */
+    public static final String ACTION_DISPLAY_CHANGED = "com.pimeorg.pime.action.DISPLAY_CHANGED";
 
     private static final int TOP_BAR_HEIGHT_DP = 44;
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
@@ -72,6 +72,10 @@ public final class PimeImeService extends InputMethodService
     private boolean coreReady;
     private File pluginDir;
     private KeyboardView keyboard;
+    private ImeToolbar toolbar;
+    /** Palette the current view was built with; candidates must match it. */
+    private KeyboardTheme inputPalette;
+    private LinearLayout candidateRow;
     private LinearLayout candidateBar;
     private HorizontalScrollView candidateScroll;
     private TextView compositionView;
@@ -148,6 +152,10 @@ public final class PimeImeService extends InputMethodService
         rebuildReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
+                if (ACTION_DISPLAY_CHANGED.equals(intent.getAction())) {
+                    refreshInputView();
+                    return;
+                }
                 // A newly installed package has to be loaded before the chain
                 // that references it can be built.
                 if (ACTION_RELOAD_PLUGINS.equals(intent.getAction())) {
@@ -158,6 +166,7 @@ public final class PimeImeService extends InputMethodService
         };
         final IntentFilter filter = new IntentFilter(ACTION_REBUILD_CHAIN);
         filter.addAction(ACTION_RELOAD_PLUGINS);
+        filter.addAction(ACTION_DISPLAY_CHANGED);
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             registerReceiver(rebuildReceiver, filter,
                     Context.RECEIVER_NOT_EXPORTED);
@@ -179,6 +188,7 @@ public final class PimeImeService extends InputMethodService
     @Override
     public View onCreateInputView() {
         final KeyboardTheme palette = KeyboardTheme.of(this);
+        inputPalette = palette;
 
         final LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -187,35 +197,38 @@ public final class PimeImeService extends InputMethodService
         root.setGravity(Gravity.BOTTOM);
         root.setBackgroundColor(palette.board);
 
-        /* Top bar: settings on the left, the composition string filling the
-         * middle, and the collapse key on the right. */
-        final LinearLayout topBar = new LinearLayout(this);
-        topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(palette.bar);
+        /* Toolbar: the same evenly spread icon row WeaveText keeps above its
+         * keys. It stays in place while composing, so settings and collapse
+         * never move as the candidate row comes and goes. */
+        toolbar = new ImeToolbar(this, palette);
+        toolbar.setListener(this::onTool);
+        root.addView(toolbar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(TOP_BAR_HEIGHT_DP)));
 
-        topBar.addView(iconButton(R.drawable.ic_settings, palette,
-                R.string.ime_action_settings, v -> openSettings()));
+        /* Composition and candidates share the row under the toolbar: the
+         * preedit on the left, the scrollable candidate strip on the right. */
+        candidateRow = new LinearLayout(this);
+        candidateRow.setOrientation(LinearLayout.HORIZONTAL);
+        candidateRow.setGravity(Gravity.CENTER_VERTICAL);
+        candidateRow.setBackgroundColor(palette.bar);
 
         compositionView = new TextView(this);
-        compositionView.setTextColor(palette.onBar);
-        compositionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        compositionView.setTextColor(palette.hint);
+        compositionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         compositionView.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         compositionView.setGravity(Gravity.CENTER_VERTICAL);
         compositionView.setSingleLine(true);
         compositionView.setEllipsize(TextUtils.TruncateAt.START);
-        compositionView.setPadding(dp(8), 0, dp(8), 0);
-        topBar.addView(compositionView, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
-
-        topBar.addView(iconButton(R.drawable.ic_expand_more, palette,
-                R.string.ime_action_hide, v -> requestHideSelf(0)));
-        root.addView(topBar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(TOP_BAR_HEIGHT_DP)));
+        compositionView.setPadding(dp(14), 0, dp(10), 0);
+        compositionView.setMaxWidth(Math.round(
+                getResources().getDisplayMetrics().widthPixels * 0.45f));
+        compositionView.setVisibility(View.GONE);
+        candidateRow.addView(compositionView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
 
         candidateScroll = new HorizontalScrollView(this);
         candidateScroll.setHorizontalScrollBarEnabled(false);
-        candidateScroll.setBackgroundColor(palette.bar);
         candidateScroll.setFillViewport(true);
         candidateBar = new LinearLayout(this);
         candidateBar.setOrientation(LinearLayout.HORIZONTAL);
@@ -223,7 +236,10 @@ public final class PimeImeService extends InputMethodService
         candidateScroll.addView(candidateBar, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         candidateScroll.setVisibility(View.GONE);
-        root.addView(candidateScroll, new LinearLayout.LayoutParams(
+        candidateRow.addView(candidateScroll, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        candidateRow.setVisibility(View.GONE);
+        root.addView(candidateRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(CANDIDATE_ROW_HEIGHT_DP)));
 
         final View divider = new View(this);
@@ -237,6 +253,7 @@ public final class PimeImeService extends InputMethodService
         keyboard.setListener(this);
         root.addView(keyboard, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
+        toolbar.setSymbolsActive(keyboard.isSymbolPage());
 
         root.setMinimumHeight(dp(TOP_BAR_HEIGHT_DP) + keyboardHeight);
         return root;
@@ -260,19 +277,67 @@ public final class PimeImeService extends InputMethodService
         return dp(total * Prefs.keyboardPercent(this) / 100);
     }
 
-    private ImageButton iconButton(int iconRes, KeyboardTheme palette, int descRes,
-                                   View.OnClickListener action) {
-        final ImageButton button = new ImageButton(this);
-        button.setImageResource(iconRes);
-        button.setColorFilter(palette.hint);
-        button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        button.setContentDescription(getString(descRes));
-        button.setPadding(dp(12), dp(12), dp(12), dp(12));
-        button.setBackground(ripple(null, palette));
-        button.setOnClickListener(action);
-        button.setLayoutParams(new LinearLayout.LayoutParams(dp(44),
-                ViewGroup.LayoutParams.MATCH_PARENT));
-        return button;
+    /** Host actions from the toolbar; none of them touch the plugin chain. */
+    private void onTool(int tool) {
+        switch (tool) {
+            case ImeToolbar.TOOL_KEYBOARD:
+                if (keyboard != null) keyboard.togglePage();
+                break;
+            case ImeToolbar.TOOL_PASTE:
+                pasteClipboard();
+                break;
+            case ImeToolbar.TOOL_SETTINGS:
+                openSettings();
+                break;
+            case ImeToolbar.TOOL_HIDE:
+                requestHideSelf(0);
+                break;
+            default:
+                break;
+        }
+    }
+
+    @Override
+    public void onPageChanged(boolean symbols) {
+        if (toolbar != null) toolbar.setSymbolsActive(symbols);
+    }
+
+    /**
+     * Inserts the clipboard's text as plain editor text. Pasting is a host
+     * action: the chain has no say in it, and a live composition is finished
+     * first because commitText replaces the composing region.
+     */
+    private void pasteClipboard() {
+        final android.content.ClipboardManager manager =
+                (android.content.ClipboardManager)
+                        getSystemService(Context.CLIPBOARD_SERVICE);
+        final android.content.ClipData clip =
+                manager == null ? null : manager.getPrimaryClip();
+        CharSequence text = null;
+        if (clip != null && clip.getItemCount() > 0) {
+            text = clip.getItemAt(0).coerceToText(this);
+        }
+        if (text == null || text.length() == 0) {
+            android.widget.Toast.makeText(this, R.string.ime_paste_empty,
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        if (!composition.isEmpty()) {
+            if (coreReady) {
+                report(core.reset(), "reset");
+                core.pump();
+            }
+            composition = "";
+            if (compositionView != null) compositionView.setText("");
+            /* reset() drops the chain's candidate list too; hiding the row by
+             * hand keeps stale candidates from being tappable after a paste. */
+            hideCandidates();
+            ic.setComposingText("", 1);
+            ic.finishComposingText();
+        }
+        ic.commitText(text, 1);
     }
 
     /** Rounded pill with a themed ripple; {@code fill} 0 keeps it transparent. */
@@ -294,9 +359,19 @@ public final class PimeImeService extends InputMethodService
     @Override
     public void onConfigurationChanged(Configuration config) {
         super.onConfigurationChanged(config);
+        refreshInputView();
+    }
+
+    /**
+     * Rebuilds the keyboard with the current palette and size while keeping the
+     * composition and candidates. Theme and height are host preferences, so a
+     * change in settings must not wait for the next time the keyboard opens.
+     */
+    private void refreshInputView() {
         if (keyboard == null) return;
         setInputView(onCreateInputView());
         compositionView.setText(composition);
+        updateCandidateRow();
         if (!candidates.isEmpty()) onCandidates(candidates.toArray(new String[0]));
     }
 
@@ -313,12 +388,9 @@ public final class PimeImeService extends InputMethodService
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
-        hideCandidates();
-        /* The composition view owns the fill weight, so it stays in the layout
-         * even when there is nothing to show; dropping it (GONE) would let the
-         * two action buttons collapse to the left and the collapse key would
-         * no longer sit at the far right. */
+        composition = "";
         if (compositionView != null) compositionView.setText("");
+        hideCandidates();
         if (!coreReady) return;
 
         if (!core.hasSession() && !core.openSession()) {
@@ -343,9 +415,9 @@ public final class PimeImeService extends InputMethodService
             report(core.reset(), "reset");
             core.pump();
         }
-        hideCandidates();
         composition = "";
         if (compositionView != null) compositionView.setText("");
+        hideCandidates();
         super.onFinishInput();
     }
 
@@ -409,11 +481,8 @@ public final class PimeImeService extends InputMethodService
     @Override
     public void onComposition(String text, int cursor) {
         composition = text == null ? "" : text;
-        if (compositionView == null) return;
-        compositionView.setText(text);
-        /* Keep the view in the layout with an empty string so the fill weight it
-         * carries still pushes the action buttons to the right edge; visibility
-         * toggling would let the buttons jump left. */
+        if (compositionView != null) compositionView.setText(composition);
+        updateCandidateRow();
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         if (text == null || text.isEmpty()) {
@@ -445,13 +514,29 @@ public final class PimeImeService extends InputMethodService
             hideCandidates();
             return;
         }
-        final KeyboardTheme palette = KeyboardTheme.of(this);
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
         final int limit = Prefs.candidates(this);
         final int count = limit > 0 ? Math.min(limit, items.length) : items.length;
         for (int i = 0; i < count; ++i) {
             candidateBar.addView(candidateItem(items[i], i, palette));
         }
         candidateScroll.setVisibility(View.VISIBLE);
+        updateCandidateRow();
+    }
+
+    /**
+     * The row under the toolbar carries the composition, candidates, or both;
+     * it only takes height when it has something to say.
+     */
+    private void updateCandidateRow() {
+        if (candidateRow == null) return;
+        final boolean composing = !composition.isEmpty();
+        if (compositionView != null) {
+            compositionView.setVisibility(composing ? View.VISIBLE : View.GONE);
+        }
+        candidateRow.setVisibility(composing || !candidates.isEmpty()
+                ? View.VISIBLE : View.GONE);
     }
 
     /**
@@ -491,6 +576,7 @@ public final class PimeImeService extends InputMethodService
         candidates.clear();
         if (candidateBar != null) candidateBar.removeAllViews();
         if (candidateScroll != null) candidateScroll.setVisibility(View.GONE);
+        updateCandidateRow();
     }
 
     @Override

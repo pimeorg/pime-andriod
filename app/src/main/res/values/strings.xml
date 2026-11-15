@@ -99,6 +99,10 @@
 
     <string name="ime_action_settings">键盘设置</string>
     <string name="ime_action_hide">收起键盘</string>
+    <string name="ime_action_symbols">符号键盘</string>
+    <string name="ime_action_letters">字母键盘</string>
+    <string name="ime_action_paste">粘贴</string>
+    <string name="ime_paste_empty">剪贴板为空</string>
 
     <!-- plugins page: chain & plugin management -->
     <string name="section_chains">链方案</string>

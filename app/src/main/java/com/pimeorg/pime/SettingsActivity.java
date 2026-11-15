@@ -1158,6 +1158,13 @@ public final class SettingsActivity extends AppCompatActivity {
         sendBroadcast(intent);
     }
 
+    /** Tells the running input service that the palette or key size changed. */
+    private void broadcastDisplayChanged() {
+        final Intent intent = new Intent(PimeImeService.ACTION_DISPLAY_CHANGED);
+        intent.setPackage(getPackageName());
+        sendBroadcast(intent);
+    }
+
     /** Host-only display preferences; nothing here feeds the plugin chain. */
     private void openSettings() {
         enterDetail(R.string.page_settings, parent -> {
@@ -1230,6 +1237,7 @@ public final class SettingsActivity extends AppCompatActivity {
         choose(R.string.row_height, labels, indexOf(values, Prefs.keyboardPercent(this)),
                 (dialog, which) -> {
                     Prefs.setKeyboardPercent(this, values[which]);
+                    broadcastDisplayChanged();
                     dialog.dismiss();
                     rebuildDetail();
                 });
@@ -1242,6 +1250,7 @@ public final class SettingsActivity extends AppCompatActivity {
         choose(R.string.row_candidates, labels, indexOf(values, Prefs.candidates(this)),
                 (dialog, which) -> {
                     Prefs.setCandidates(this, values[which]);
+                    broadcastDisplayChanged();
                     dialog.dismiss();
                     rebuildDetail();
                 });
@@ -1262,6 +1271,7 @@ public final class SettingsActivity extends AppCompatActivity {
         }
         choose(R.string.row_theme, labels, selected, (dialog, which) -> {
             Prefs.setTheme(this, values[which]);
+            broadcastDisplayChanged();
             dialog.dismiss();
             // Recreates the activity (and any open input view) with the new
             // night mode, so there is nothing left to rebuild here.
