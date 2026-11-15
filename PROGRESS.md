@@ -627,17 +627,22 @@ EditText 里取回的字符为 U+007E / U+201C / U+FF08，确认是清单里的�
   Shift 的大小写仍在宿主侧生效。
 - **切换时保留已打的字**：组合中切到英文，先把组合串按原样提交（与 WeaveText
   `commitRaw()` 一致），再清空组合与候选；切回中文从空组合开始。
-- **会话重建**：`pime_core_reset` 只是向链发一个 `reset` 事件，而随包的
-  `pime-pinyin-parse` 不消费该事件，缓冲区仍留在会话的插件 state 里。实测
-  直接 `reset()` 后切回中文再打 `nihao`，组合串变成 `hnihao`（旧的 `h` 复活）。
-  因此切换时改为 `closeSession()` + `openSession()` 并重新上报
-  context/secure/focus：新会话的插件 state 为空，与链无关，也不依赖某个插件
-  记得处理 `reset`。
+- **reset 契约（插件侧修复）**：`pime_core_reset` 只是向链发一个 `reset`
+  事件，而随包的 parse 插件都不消费该事件，缓冲区仍留在会话的插件 state 里。
+  实测直接 `reset()` 后切回中文再打 `nihao`，组合串变成 `hnihao`（旧的 `h`
+  复活）。根因在插件，已在 `pime-public-plugin` 修复：五个 parse 插件在
+  `reset` 时清空缓冲并发 `set_composition("")` + `hide_candidates`，
+  shuangpin 丢弃半音节，candidates-format 清页码；同时把契约写进
+  `docs/plugin.md`。Android 侧同步 `pinyin-parse 1.1.3` /
+  `candidates-format 1.3.2` 并更新链 CBOR 的版本字段，宿主改回
+  `core.reset()`，不再用“重建会话”绕过。
 - **偏好**：模式写入 `SharedPreferences`（`english`），输入服务重建视图时
   读取，所以重启输入法后仍保持上次选择。
 
 MuMu 12（Android 15 / x86_64）实测：中文组合 `h` 时点「中/英」，输入框留下
 普通文本 `h`、候选清空、键上 `英` 变粗；英文模式连打 `nihao` 得到字面
 `hnihao`，无组合串与候选；切回中文再打 `nihao`，组合串恰为 `nihao`、候选首位
-「你好」，旧 `h` 未复活。`shared_prefs/pime.xml` 中 `english` 随点击在
-`true`/`false` 间落盘；符号页底行同样有该键。
+「你好」，旧 `h` 未复活（日志显示 `pinyin-parse 1.1.3` 与
+`candidates-format 1.3.2` 已加载、链 `default.cbor` 激活）。
+`shared_prefs/pime.xml` 中 `english` 随点击在 `true`/`false` 间落盘；
+符号页底行同样有该键。

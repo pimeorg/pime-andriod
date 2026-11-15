@@ -315,18 +315,11 @@ public final class PimeImeService extends InputMethodService
         if (composition.isEmpty()) return;
         final String raw = composition;
         if (coreReady) {
-            /* The pinyin buffer lives in the session's plugin state, and the
-             * chain does not consume a `reset` event, so dropping and reopening
-             * the session is the only chain-agnostic way to end the
-             * composition. Otherwise the old letters would come back the next
-             * time the user types in Chinese. */
-            core.closeSession();
-            if (!core.openSession()) {
-                Log.w(TAG, "session reopen failed");
-            } else {
-                final EditorInfo info = getCurrentInputEditorInfo();
-                if (info != null) reportContext(info);
-            }
+            /* `reset` is the chain contract for cancelling a composition: the
+             * parse plugin drops its buffer and asks the host to finish the
+             * preedit and hide the bar. */
+            report(core.reset(), "reset");
+            core.pump();
         }
         composition = "";
         if (compositionView != null) compositionView.setText("");

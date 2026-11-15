@@ -104,8 +104,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 上滑字符只认带副标签的字母键（三行）：竖向位移至少 `max(28dp, 0.55 × 键高)`，
   且大于横向位移的 1.5 倍；不满足时按普通字母处理，快速连打不会把字母变成数字。
 - 「中/英」是宿主模式：英文下按键不再交给插件链，直接 `commitText` 上屏；
-  切换时进行中的组合按原样提交，并重建会话，避免旧码串在切回中文后复活。
-  该选择写入 `SharedPreferences`，输入服务重启后保持。
+  切换时进行中的组合按原样提交，再 `pime_core_reset` 结束组合（parse 插件
+  负责清空缓冲），避免旧码串在切回中文后复活。该选择写入
+  `SharedPreferences`，输入服务重启后保持。
 - 主题或键盘高度变化时设置页广播 `ACTION_DISPLAY_CHANGED`，运行中的输入服务
   重建输入视图并保留组合串与候选。
 - `onStartInput` 设置上下文（app_id、field_type、locale=zh_CN、page_size=20、
