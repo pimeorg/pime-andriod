@@ -526,3 +526,21 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   其它拒绝（签名、依赖、ABI major）要等 core 报 `NOT_FOUND` / `CORRUPT`，
   而这类包在「未启用插件」里看起来和正常包一样。
 - 未使用 `pime_core_touch`（手写输入 UI 未实现）。
+
+## 同步 18 个插件并复测（2026-11-15）
+
+插件仓库把 WeaveText 能力补齐后，本轮把 Android 宿主同步到新插件集并复测：
+
+- `assets/plugins/` 从 5 个包换成 18 个 WASM 包（拼音、拆字、特殊候选、快捷短语、
+  繁简、表情、验证码、用户学习、联想、模式记忆、词库包、个人资料、模型目录）。
+- `assets/chains/default.cbor` 由 `pime-public-plugin` 的
+  `chains/pinyin/default.yaml` 生成（去掉 Lua 插件）。
+- `CHAIN_CAPABILITIES` 增加 `store.kv`、`time`、`context.read`、
+  `surrounding.read`。
+
+MuMu 12（Android 15 / x86_64）实测通过：`nihao → 你好`、`dz → 地址`、
+`rq → 2026年11月15日`、`v1234 → 1234/大写金额/中文数字`、`umumu → 林`、
+`shuo → 說`、`xiexie → 謝謝` 且提交后重打仍首位。
+
+期间插件侧修复三个只在 WAMR/Android 暴露的问题（WASM `memset/memcpy`
+未定义导入、v 模式数字被当选词、u 模式被拼写纠正改写），宿主侧只需同步包与链。

@@ -54,7 +54,8 @@ public final class PimeImeService extends InputMethodService
 
     /** Union of the capabilities declared by the bundled chain plugins. */
     private static final String[] CHAIN_CAPABILITIES = {
-            "input.read", "workspace", "output.emit", "asset.read"
+            "input.read", "workspace", "output.emit", "asset.read",
+            "store.kv", "time", "context.read", "surrounding.read"
     };
 
     /** Local action: the settings page edited a chain and wants the kernel rebuilt. */
