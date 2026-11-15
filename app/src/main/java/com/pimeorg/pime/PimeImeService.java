@@ -50,6 +50,9 @@ public final class PimeImeService extends InputMethodService
             (byte) 0xA1, 0x67, 'p', 'l', 'u', 'g', 'i', 'n', 's', (byte) 0x80
     };
 
+    /** Bundled chain the 中/英 key switches to; the active chain stays Chinese. */
+    private static final String ENGLISH_CHAIN = ChainStore.ENGLISH_CHAIN;
+
     /** Union of the capabilities declared by the bundled chain plugins. */
     private static final String[] CHAIN_CAPABILITIES = {
             "input.read", "workspace", "output.emit", "asset.read",
@@ -88,6 +91,15 @@ public final class PimeImeService extends InputMethodService
     private final List<String> candidates = new ArrayList<>();
     private BroadcastReceiver rebuildReceiver;
 
+    /**
+     * Two generations live side by side: the Chinese chain chosen in settings
+     * and the bundled English chain. The 中/英 key only activates one or the
+     * other, so no plugin is rebuilt while typing.
+     */
+    private long chineseGeneration;
+    private long englishGeneration;
+    private long activeGeneration;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -121,36 +133,71 @@ public final class PimeImeService extends InputMethodService
         grantChainCapabilities();
         loadPlugins(pluginDir);
 
-        activateActiveChain();
+        buildGenerations();
         registerRebuildReceiver();
     }
 
-    /** Builds and activates the chain selected in settings, or the empty one. */
-    private void activateActiveChain() {
-        final File chain = ChainStore.activeChain(this);
-        final byte[] config = readBytes(chain);
-        if (config != null && core.useGeneration(config)) {
-            Log.i(TAG, "active chain: " + chain.getName());
-        } else if (config == null) {
-            Log.w(TAG, "active chain " + chain.getName() + " missing; keys stay unhandled");
-            if (!core.useGeneration(EMPTY_GENERATION)) {
-                Log.w(TAG, "empty generation not activatable");
-            }
-        } else {
-            Log.w(TAG, "active chain " + chain.getName() + " not activatable");
-        }
+    /**
+     * Builds both generations and activates the one for the current language.
+     * Old generations are retired after the switch, never before it, so a
+     * failed build cannot leave the keyboard without a working chain.
+     */
+    private void buildGenerations() {
+        if (!coreReady) return;
+        final long oldChinese = chineseGeneration;
+        final long oldEnglish = englishGeneration;
+
+        chineseGeneration = buildChain(ChainStore.activeChain(this), true);
+        englishGeneration = buildChain(
+                new File(ChainStore.chainsDir(this), ENGLISH_CHAIN), false);
+        activeGeneration = 0;
+        activateForLanguage(Prefs.english(this));
+
+        retireGeneration(oldChinese);
+        retireGeneration(oldEnglish);
     }
 
-    /** Re-reads the active chain and rebuilds the generation when settings changed it. */
-    private void rebuildActiveChain() {
-        if (!coreReady) return;
-        final File chain = ChainStore.activeChain(this);
+    /**
+     * Reads and builds one chain file. A missing Chinese chain falls back to
+     * an empty generation so the keyboard still works without plugins; a
+     * missing English chain leaves English keys on the host path.
+     */
+    private long buildChain(File chain, boolean allowEmptyFallback) {
         final byte[] config = readBytes(chain);
-        if (config == null || !core.useGeneration(config)) {
-            Log.w(TAG, "chain rebuild failed: " + chain.getName());
-        } else {
-            Log.i(TAG, "chain rebuilt: " + chain.getName());
+        if (config == null) {
+            Log.w(TAG, "chain " + chain.getName() + " missing");
+            if (!allowEmptyFallback) return 0;
+            final long empty = core.buildGeneration(EMPTY_GENERATION);
+            if (empty == 0) Log.w(TAG, "empty generation not buildable");
+            return empty;
         }
+        final long built = core.buildGeneration(config);
+        if (built == 0) {
+            Log.w(TAG, "chain " + chain.getName() + " not buildable");
+        } else {
+            Log.i(TAG, "chain built: " + chain.getName());
+        }
+        return built;
+    }
+
+    /** Switches to the generation that belongs to the 中/英 side. */
+    private void activateForLanguage(boolean english) {
+        if (!coreReady) return;
+        final long target = english ? englishGeneration : chineseGeneration;
+        if (target == 0 || target == activeGeneration) return;
+        if (core.activateGeneration(target) != 0) {
+            Log.w(TAG, "generation " + target + " not activatable");
+            return;
+        }
+        activeGeneration = target;
+        Log.i(TAG, "active generation: " + (english ? "english" : "chinese"));
+    }
+
+    private void retireGeneration(long generation) {
+        if (!coreReady || generation == 0 || generation == activeGeneration) return;
+        final int status = core.retireGeneration(generation);
+        if (status != 0) Log.w(TAG, "retire generation " + generation + ": "
+                + core.statusString(status));
     }
 
     private void registerRebuildReceiver() {
@@ -166,7 +213,7 @@ public final class PimeImeService extends InputMethodService
                 if (ACTION_RELOAD_PLUGINS.equals(intent.getAction())) {
                     loadPlugins(pluginDir);
                 }
-                rebuildActiveChain();
+                buildGenerations();
             }
         };
         final IntentFilter filter = new IntentFilter(ACTION_REBUILD_CHAIN);
@@ -305,15 +352,14 @@ public final class PimeImeService extends InputMethodService
     }
 
     /**
-     * 中/英 is a host mode, not a chain action: English keys are committed
-     * straight to the editor. A composition in flight is committed as raw
-     * letters first (the same thing WeaveText does), so switching does not eat
-     * what was already typed.
+     * 中/英 switches the active generation: the Chinese chain chosen in
+     * settings or the bundled English chain. A composition in flight is
+     * committed as raw letters first (the same thing WeaveText does), so
+     * switching does not eat what was already typed.
      */
     @Override
     public void onLanguageChanged(boolean english) {
         Prefs.setEnglish(this, english);
-        if (composition.isEmpty()) return;
         final String raw = composition;
         if (coreReady) {
             /* `reset` is the chain contract for cancelling a composition: the
@@ -326,10 +372,12 @@ public final class PimeImeService extends InputMethodService
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
         final InputConnection ic = getCurrentInputConnection();
-        if (ic == null) return;
-        ic.setComposingText("", 1);
-        ic.finishComposingText();
-        ic.commitText(raw, 1);
+        if (ic != null && !raw.isEmpty()) {
+            ic.setComposingText("", 1);
+            ic.finishComposingText();
+            ic.commitText(raw, 1);
+        }
+        activateForLanguage(english);
     }
 
     /**
@@ -462,20 +510,67 @@ public final class PimeImeService extends InputMethodService
         final String text = key.kind == KeyboardView.KIND_CHAR
                 || key.kind == KeyboardView.KIND_SPACE
                 ? String.valueOf(textFor(key, shifted)) : null;
+        final boolean english = keyboard != null && keyboard.isEnglish();
 
-        /* English mode is host-side: the chain never sees these keys, so no
-         * pinyin composition can start while the key shows 英. */
-        if (coreReady && (keyboard == null || !keyboard.isEnglish())) {
+        /* English shares the chain path. The bundled English chain is only
+         * skipped when it is not installed, so without it English still types
+         * through the editor instead of falling back to pinyin. */
+        if (coreReady && (!english || englishGeneration != 0)) {
+            if (english && endsEnglishComposition(key)) {
+                if (commitEnglishCompositionThen(text)) return;
+            }
             final int status = core.key(key.code,
                     shifted ? PimeCore.MOD_SHIFT : 0, PimeCore.KEY_DOWN, text);
             core.pump();
-            if (status == 1) return;
+            if (status == 1) {
+                /* The chain confirms the typed word on space; the space the
+                 * user pressed belongs in the editor, not in the candidate. */
+                if (english && key.kind == KeyboardView.KIND_SPACE) appendSpace();
+                return;
+            }
             if (status < 0) {
                 Log.w(TAG, "key " + key.code + ": "
                         + core.statusString(-status));
             }
         }
         passThrough(key, text);
+    }
+
+    /**
+     * Digits 1-9 pick candidates while the English chain is composing, and
+     * letters and the apostrophe extend the word. Every other symbol ends the
+     * composition and is inserted after it, so punctuation never silently
+     * replaces the typed word (and is never swallowed by the chain).
+     */
+    private boolean endsEnglishComposition(KeyboardView.Key key) {
+        if (key.kind != KeyboardView.KIND_CHAR) return false;
+        final char c = (char) key.code;
+        if (Character.isLetter(c) || c == '\'') return false;
+        return c < '1' || c > '9';
+    }
+
+    /** Commits the live English word, then the symbol the user pressed. */
+    private boolean commitEnglishCompositionThen(String text) {
+        if (composition.isEmpty()) return false;
+        final String word = composition;
+        if (coreReady) {
+            report(core.reset(), "reset");
+            core.pump();
+        }
+        composition = "";
+        if (compositionView != null) compositionView.setText("");
+        hideCandidates();
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return true;
+        ic.setComposingText("", 1);
+        ic.finishComposingText();
+        ic.commitText(word + (text == null ? "" : text), 1);
+        return true;
+    }
+
+    private void appendSpace() {
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic != null) ic.commitText(" ", 1);
     }
 
     private void passThrough(KeyboardView.Key key, String text) {

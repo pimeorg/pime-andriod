@@ -1,0 +1,20 @@
+api: 1
+id: android-english
+description: Android 英文链（仅 WASM 插件，无 Lua 运行时）
+core: ">=1.0.0"
+
+plugins:
+  - { id: pime-keymap-default, role: preprocess, version: 1.2.0 }
+  - { id: pime-english-parse, role: parse, version: 1.0.1 }
+  - { id: pime-english-translate, role: translate, version: 1.0.1 }
+  - { id: pime-candidates-format, role: format, version: 1.3.2,
+      settings: { page_size: 9 } }
+
+workspace:
+  - { key: plugin/pime-keymap-default/action,
+      from: pime-keymap-default, to: [pime-english-parse] }
+  - { key: plugin/pime-english-parse/raw,
+      from: pime-english-parse,
+      to: [pime-english-translate, pime-candidates-format] }
+  - { key: plugin/pime-english-translate/candidates,
+      from: pime-english-translate, to: [pime-candidates-format] }

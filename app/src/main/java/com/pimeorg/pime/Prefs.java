@@ -95,8 +95,9 @@ public final class Prefs {
     }
 
     /**
-     * English is a host mode: keys skip the plugin chain and go straight to the
-     * editor. Persisted so the choice survives the input service restarting.
+     * Which side the 中/英 key shows. English uses the bundled English chain
+     * instead of the Chinese plan; persisted so the choice survives the input
+     * service restarting.
      */
     public static boolean english(Context context) {
         return prefs(context).getBoolean("english", false);

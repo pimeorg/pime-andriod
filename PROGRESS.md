@@ -676,3 +676,60 @@ MuMu 12（Android 15 / x86_64）实测：中文组合 `h` 时点「中/英」，
   键盘，无需重开。
 - **实测**：两档分别输入 `nihao`，上行显示 `ni'hao` 与 `ni hao`，编辑器里
   仍是 `nihao`，候选不受影响；偏好落盘为 `pinyin_separator`。
+
+## 英文候选（2026-11-15）
+
+用户问“为什么英文目前没有候选词”，要求该补插件就补插件。根因有两条：宿主在
+英文模式下**刻意绕过插件链**（上一节的设计），而随包的 18 个插件与 `default.cbor`
+里也**没有英文链**。两处都要动。
+
+### 宿主：中/英改为两代切换
+
+- `buildGenerations()` 在 `onCreate` 与 `ACTION_RELOAD_PLUGINS` 时各构建一代：
+  中文代用 `files/chains/<活动链>`，英文代用随包复制的
+  `files/chains/english.cbor`。中/英键只调 `activateForLanguage()`，输入中切换
+  不重建链；切换完成后 `pime_generation_retire` 旧的另一代。
+- 会话与插件 state 不随代切换丢失（core 的会话按插件别名保留状态），但英文
+  组合中的切回中文仍按原规则先提交原码、再 `reset`。
+- 英文链的数据目录与中文链相同；`ChainStore.isReservedName()` 把
+  `english.cbor` 标为保留名，设置页不列它，新建/重命名/导入时拒绝占用。
+- `english.cbor` 由 `tools/chains/android-english.yaml` 生成
+  （`python pime-public-plugin/tools/chainc ... -o app/src/main/assets/chains/english.cbor`）：
+  keymap-default 1.2.0 → english-parse 1.0.1 → english-translate 1.0.1 →
+  candidates-format 1.3.2（`page_size: 9`）。
+
+### 宿主：空格与标点的英文语义
+
+插件只负责“原文在前、补全在后”，提交语义按 WeaveText 在宿主薄层补齐：
+空格键走链（链提交原码），`status == 1` 时再 `commitText(" ")`；点候选只提交
+词本身，不加空格；字母/撇号/1–9 以外的字符先把原码提交、`reset`、再插入该
+字符，不补空格（1–9 仍交给链做候选选择）。
+
+### 插件：`pime-english-translate` 1.0.1
+
+- **漏词**：旧实现按词表顺序把匹配塞进最多 N 个槽位，`hel` 的槽位被
+  `held`/`helen`/… 占满，`hello` 根本没进来，频次排序等于没起作用。改为
+  维持 top-N（新候选只看是否优于当前最差项），补全上限 `completion_limit`
+  改到排序之后只对补全生效，原码与精确词条永不被截。
+- **词表**：starter 90 行换成 `tools/english_dict` 从 rime-wanxiang
+  `en.dict.yaml` 生成的 36,345 条（758,967 字节，插件 1 MB 上限内）。
+  键 = 小写 + 去撇号（匹配时同样去撇号，`dont` 补出 `don't`）；text 保留原
+  拼写（`GitHub`/`WiFi`/`API`）；只收单 token，频次 ≥ 50，另保留带大写或
+  撇号的条目。
+- `data/english/english.dict`、包内 `assets/english.dict`、`latin.lock.yaml`
+  的版本字段同步；18 个英文用例全部通过。
+
+### 验证（MuMu 12 / Android 15 / x86_64）
+
+- 输入 `hel`：候选 `hel / help / held / helped / hell`；`dont` 出现 `don't`。
+- 空格：提交原码 `hel` 并插入一个空格；点候选 `help` 只落 `help`，无空格；
+  句点：先提交原码再落 `.`，无空格。
+- 中/英来回切换正常（logcat `active generation: english/chinese`），重启输入法
+  后仍停在英文；`shared_prefs/pime.xml` 的 `english` 同步。
+- 设置页「插件与链」只列 `default`（18 个插件），`english.cbor` 不出现。
+
+### 观察到但未修
+
+`pime-predict-context-1.1.0` 在 `onStartInput` 时日志报 `context: NOT_FOUND`：
+该包清单声明了 `continuation.tsv` / `collocations.tsv`，但包里没有这两个资产。
+它在中文链末尾，失败只跳过自身，不影响候选。属插件包内容问题，与本轮无关。

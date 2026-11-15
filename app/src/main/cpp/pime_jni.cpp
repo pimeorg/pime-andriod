@@ -456,6 +456,15 @@ Java_com_pimeorg_pime_PimeCore_nativeActivateGeneration(JNIEnv*, jobject, jlong 
         pime_generation_activate(instance, static_cast<uint64_t>(generation)));
 }
 
+JNIEXPORT jint JNICALL
+Java_com_pimeorg_pime_PimeCore_nativeRetireGeneration(JNIEnv*, jobject, jlong core,
+                                                   jlong generation) {
+    pime_core* instance = core_of(core);
+    if (!instance || generation == 0) return PIME_INVALID;
+    return static_cast<jint>(
+        pime_generation_retire(instance, static_cast<uint64_t>(generation)));
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_pimeorg_pime_PimeCore_nativeSessionCreate(JNIEnv*, jobject, jlong core) {
     pime_core* instance = core_of(core);

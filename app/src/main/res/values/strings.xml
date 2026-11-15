@@ -139,6 +139,7 @@
     <string name="chain_name_hint">链名</string>
     <string name="new_chain_exists">该链已存在</string>
     <string name="chain_name_invalid">名称不能为空</string>
+    <string name="chain_name_reserved">该名称是内置英文链保留名称</string>
     <string name="chain_deleted">已删除链：%1$s</string>
     <string name="chain_renamed">已重命名为：%1$s</string>
     <string name="chain_switched">已切换链：%1$s</string>

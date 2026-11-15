@@ -460,6 +460,8 @@ public final class SettingsActivity extends AppCompatActivity {
         final LinearLayout chainCard = addCard(parent);
         final List<File> chains = ChainStore.listChains(this);
         for (File chain : chains) {
+            /* The English chain is bound to the 中/英 key, not a user plan. */
+            if (chain.getName().equals(ChainStore.ENGLISH_CHAIN)) continue;
             final boolean isActive = chain.getName().equals(activeName);
             final int count = isActive ? chainPlugins.size() : readChainSafe(chain).size();
             addChainRow(chainCard, chain, isActive, count, v -> switchChain(chain));
@@ -828,6 +830,9 @@ public final class SettingsActivity extends AppCompatActivity {
         promptForName(R.string.action_rename_chain, current, getString(R.string.chain_name_hint),
                 name -> {
                     if (name.isEmpty()) return getString(R.string.chain_name_invalid);
+                    if (ChainStore.isReservedName(name)) {
+                        return getString(R.string.chain_name_reserved);
+                    }
                     if (!name.equals(current) && ChainStore.chainFile(this, name).exists()) {
                         return getString(R.string.new_chain_exists);
                     }
@@ -1043,6 +1048,9 @@ public final class SettingsActivity extends AppCompatActivity {
         promptForName(R.string.new_chain_title, "", getString(R.string.new_chain_hint),
                 name -> {
                     if (name.isEmpty()) return getString(R.string.chain_name_invalid);
+                    if (ChainStore.isReservedName(name)) {
+                        return getString(R.string.chain_name_reserved);
+                    }
                     if (ChainStore.chainFile(this, name).exists()) {
                         return getString(R.string.new_chain_exists);
                     }
@@ -1133,6 +1141,10 @@ public final class SettingsActivity extends AppCompatActivity {
         try {
             final String display = uri.getLastPathSegment() != null
                     ? uri.getLastPathSegment() : "imported.cbor";
+            if (ChainStore.isReservedName(display)) {
+                snack(getString(R.string.chain_name_reserved));
+                return;
+            }
             final File target = ChainStore.chainFile(this, display);
             try (InputStream in = getContentResolver().openInputStream(uri);
                  FileOutputStream out = new FileOutputStream(target)) {

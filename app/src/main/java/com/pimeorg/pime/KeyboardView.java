@@ -81,8 +81,8 @@ public final class KeyboardView extends View {
         }
 
         /**
-         * The 中/英 key was tapped. English is a host mode: the service stops
-         * offering keys to the chain and types them straight into the editor.
+         * The 中/英 key was tapped. The service switches the active generation:
+         * the Chinese plan or the bundled English chain.
          */
         default void onLanguageChanged(boolean english) {
         }
@@ -152,7 +152,7 @@ public final class KeyboardView extends View {
         return shift;
     }
 
-    /** True while the 中/英 key shows English: keys skip the chain. */
+    /** True while the 中/英 key shows English: the English chain is active. */
     public boolean isEnglish() {
         return english;
     }

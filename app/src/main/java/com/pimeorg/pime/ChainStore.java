@@ -37,6 +37,12 @@ public final class ChainStore {
         }
     }
 
+    /**
+     * Built-in chain used while the keyboard is on the 英 side. It is not a
+     * user-editable plan: the 中/英 key always activates it directly.
+     */
+    public static final String ENGLISH_CHAIN = "english.cbor";
+
     private static final String PLUGINS_KEY = "plugins";
 
     private ChainStore() {
@@ -70,6 +76,11 @@ public final class ChainStore {
         }
         result.sort((a, b) -> a.getName().compareTo(b.getName()));
         return result;
+    }
+
+    /** True when {@code name} would collide with the built-in English chain. */
+    public static boolean isReservedName(String name) {
+        return ENGLISH_CHAIN.equals(sanitizeName(name));
     }
 
     private static String sanitizeName(String name) {

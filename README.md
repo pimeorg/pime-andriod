@@ -25,8 +25,9 @@ pime-android/
 │   ├── CMakeLists.txt                    add_subdirectory(pime-core) + vmlib + pime_jni
 │   └── pime_jni.cpp                      C ABI ↔ JNI，无输入逻辑
 ├── app/src/main/assets/
-│   ├── plugins/                          随包发布的 WASM 插件包（18 个）
-│   └── chains/default.cbor               默认链
+│   ├── plugins/                          随包发布的 WASM 插件包（20 个）
+│   ├── chains/default.cbor               默认（中文）链
+│   └── chains/english.cbor               内置英文链
 ├── third_party/wamr/                     WAMR 2.4.1 源码（core 的 WASM 后端）
 ├── TASK.md / PROGRESS.md
 └── gradlew / gradlew.bat
@@ -74,7 +75,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 /data/data/dev.pime.ime/files/
 ├── plugins/<id>/manifest.yaml + plugin.wasm|plugin.lua + 资产
-├── chains/default.cbor          # tools/chainc 生成的链配置；缺失时使用空链
+├── chains/<name>.cbor           # tools/chainc 生成的链配置；缺失时使用空链
 └── trust/                       # 信任根
 ```
 
@@ -103,10 +104,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   粘贴在组合中会先结束组合并清掉候选，避免 `commitText` 顶掉正在输入的内容。
 - 上滑字符只认带副标签的字母键（三行）：竖向位移至少 `max(28dp, 0.55 × 键高)`，
   且大于横向位移的 1.5 倍；不满足时按普通字母处理，快速连打不会把字母变成数字。
-- 「中/英」是宿主模式：英文下按键不再交给插件链，直接 `commitText` 上屏；
-  切换时进行中的组合按原样提交，再 `pime_core_reset` 结束组合（parse 插件
-  负责清空缓冲），避免旧码串在切回中文后复活。该选择写入
-  `SharedPreferences`，输入服务重启后保持。
+- 「中/英」切换代：启动时构建两代——当前中文链（`files/chains/<活动链>`）与
+  内置英文链（`assets/chains/english.cbor`）——切换只做
+  `pime_generation_activate`，输入中不重建链。切换时进行中的组合按原样提交，
+  再 `pime_core_reset` 结束组合（parse 插件负责清空缓冲），避免旧码串在切回
+  中文后复活。该选择写入 `SharedPreferences`，输入服务重启后保持。
+- 英文链是 keymap → english-parse → english-translate → candidates-format。
+  宿主只在按键层补两点 WeaveText 语义：空格让链提交原码后再补一个空格，
+  标点/数字以外的字符先提交原码再插入该字符（不补空格）。候选点按由
+  candidates-format 提交词本身，不加空格。
 - 主题或键盘高度变化时设置页广播 `ACTION_DISPLAY_CHANGED`，运行中的输入服务
   重建输入视图并保留组合串与候选。
 - `onStartInput` 设置上下文（app_id、field_type、locale=zh_CN、page_size=20、
@@ -117,8 +123,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 - Lua 运行时未启用（`PIME_BUILD_LUA=OFF`）：Lua 插件包不能在本 APK 内执行；
   WASM 插件包已可执行。
-- 随包只内置五个第一方 WASM 包（keymap-default、pinyin-parse、pinyin-translate、
-  pinyin-rank、candidates-format）与一条默认链。
+- 随包内置 20 个第一方 WASM 包（拼音、拆字、英文、繁简、表情、快捷短语、
+  学习/联想等）与两条链：`default.cbor`（中文，可在设置页增删改）与
+  `english.cbor`（英文，保留名称，不出现在链列表里）。
 - 只有 debug 签名；release 签名与混淆未配置。
 - 未在 arm64 物理设备上验证；已在 MuMu 12（Android 15 / API 35 / x86_64）上
   跑通插件加载、`nihao → 你好` 候选与提交。

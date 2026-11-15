@@ -114,20 +114,41 @@ public final class PimeCore {
     }
 
     /**
-     * Builds and activates a generation from chain CBOR. A generation with an
-     * empty plugin list is valid; it simply leaves every key unhandled.
+     * Builds a generation from chain CBOR without activating it. A generation
+     * with an empty plugin list is valid; it simply leaves every key unhandled.
+     *
+     * @return the generation id, or 0 when it could not be built
      */
-    public boolean useGeneration(byte[] config) {
-        if (core == 0 || config == null) return false;
-        long built = nativeBuildGeneration(core, config);
-        if (built == 0) return false;
-        int status = nativeActivateGeneration(core, built);
+    public long buildGeneration(byte[] config) {
+        if (core == 0 || config == null) return 0;
+        return nativeBuildGeneration(core, config);
+    }
+
+    /** Activates a generation built earlier. @return 0 on success. */
+    public int activateGeneration(long generation) {
+        if (core == 0 || generation == 0) return -1;
+        final int status = nativeActivateGeneration(core, generation);
         if (status != 0) {
             android.util.Log.w(TAG, "activate generation: " + statusString(status));
-            return false;
+            return status;
         }
-        generation = built;
-        return true;
+        this.generation = generation;
+        return 0;
+    }
+
+    /**
+     * Frees a generation that is no longer active. The core refuses to retire
+     * the active generation, so callers switch first and retire afterwards.
+     */
+    public int retireGeneration(long generation) {
+        if (core == 0 || generation == 0) return -1;
+        return nativeRetireGeneration(core, generation);
+    }
+
+    /** Builds and activates a generation from chain CBOR. */
+    public boolean useGeneration(byte[] config) {
+        final long built = buildGeneration(config);
+        return built != 0 && activateGeneration(built) == 0;
     }
 
     public boolean openSession() {
@@ -237,6 +258,8 @@ public final class PimeCore {
     private native long nativeBuildGeneration(long core, byte[] config);
 
     private native int nativeActivateGeneration(long core, long generation);
+
+    private native int nativeRetireGeneration(long core, long generation);
 
     private native long nativeSessionCreate(long core);
 
