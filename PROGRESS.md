@@ -646,3 +646,16 @@ MuMu 12（Android 15 / x86_64）实测：中文组合 `h` 时点「中/英」，
 `candidates-format 1.3.2` 已加载、链 `default.cbor` 激活）。
 `shared_prefs/pime.xml` 中 `english` 随点击在 `true`/`false` 间落盘；
 符号页底行同样有该键。
+
+## 拼音行独立于候选行之上（2026-11-15）
+
+用户提出“拼音应该在候选词的上方而非左方”。此前 `candidateRow` 是横向
+`LinearLayout`：组合串在左（最宽 45% 屏宽、从头部截断），候选滚动条占剩余
+宽度。改为纵向排布：
+
+- `candidateRow` 改 `VERTICAL`；`compositionView` 独占上方一行（30dp、全宽、
+  左对齐、尾部截断），候选 `HorizontalScrollView` 在下方保持 48dp。
+- 两层各自固定高度，容器 `WRAP_CONTENT`：无候选时只显示拼音行，无拼音时
+  只显示候选行，两者都没有时整块 `GONE`；`root` 仍靠底，键盘位置不动。
+- MuMu 12（1080×1920）试输入框实测：输入 `nh` 时拼音在上一行，候选
+  你好/你會/女孩/男孩/年後 在下一行且未被挤占；横屏布局同样正常。

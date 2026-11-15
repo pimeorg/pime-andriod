@@ -65,6 +65,8 @@ public final class PimeImeService extends InputMethodService
 
     private static final int TOP_BAR_HEIGHT_DP = 44;
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
+    /** The preedit gets its own line above the candidate strip. */
+    private static final int COMPOSITION_ROW_HEIGHT_DP = 30;
     /** Keys are laid out inside the view; this is everything around the four rows. */
     private static final float ROW_CHROME_DP = 9f + 7f + 8f * 3;
 
@@ -205,27 +207,23 @@ public final class PimeImeService extends InputMethodService
         root.addView(toolbar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(TOP_BAR_HEIGHT_DP)));
 
-        /* Composition and candidates share the row under the toolbar: the
-         * preedit on the left, the scrollable candidate strip on the right. */
+        /* Composition sits on its own line above the scrollable candidate
+         * strip, so a long preedit never squeezes the candidates off screen. */
         candidateRow = new LinearLayout(this);
-        candidateRow.setOrientation(LinearLayout.HORIZONTAL);
-        candidateRow.setGravity(Gravity.CENTER_VERTICAL);
+        candidateRow.setOrientation(LinearLayout.VERTICAL);
         candidateRow.setBackgroundColor(palette.bar);
 
         compositionView = new TextView(this);
         compositionView.setTextColor(palette.hint);
-        compositionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        compositionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         compositionView.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        compositionView.setGravity(Gravity.CENTER_VERTICAL);
+        compositionView.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         compositionView.setSingleLine(true);
-        compositionView.setEllipsize(TextUtils.TruncateAt.START);
-        compositionView.setPadding(dp(14), 0, dp(10), 0);
-        compositionView.setMaxWidth(Math.round(
-                getResources().getDisplayMetrics().widthPixels * 0.45f));
+        compositionView.setEllipsize(TextUtils.TruncateAt.END);
+        compositionView.setPadding(dp(16), 0, dp(16), 0);
         compositionView.setVisibility(View.GONE);
         candidateRow.addView(compositionView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(COMPOSITION_ROW_HEIGHT_DP)));
 
         candidateScroll = new HorizontalScrollView(this);
         candidateScroll.setHorizontalScrollBarEnabled(false);
@@ -237,10 +235,10 @@ public final class PimeImeService extends InputMethodService
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         candidateScroll.setVisibility(View.GONE);
         candidateRow.addView(candidateScroll, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(CANDIDATE_ROW_HEIGHT_DP)));
         candidateRow.setVisibility(View.GONE);
         root.addView(candidateRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(CANDIDATE_ROW_HEIGHT_DP)));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         final View divider = new View(this);
         divider.setBackgroundColor(palette.divider);
@@ -562,8 +560,9 @@ public final class PimeImeService extends InputMethodService
     }
 
     /**
-     * The row under the toolbar carries the composition, candidates, or both;
-     * it only takes height when it has something to say.
+     * The stack under the toolbar carries the preedit line above the candidate
+     * strip, either alone, or nothing; it only takes height when it has
+     * something to say.
      */
     private void updateCandidateRow() {
         if (candidateRow == null) return;
