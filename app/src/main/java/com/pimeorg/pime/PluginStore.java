@@ -329,6 +329,11 @@ public final class PluginStore {
 
     // ------------------------------------------------------------------ manifest & paths
 
+    /** Parses a manifest already in memory (e.g. read from the bundled assets). */
+    public static Manifest parseManifestText(Context context, String text) throws IOException {
+        return parseManifest(context, text);
+    }
+
     private static Manifest parseManifest(Context context, String text) throws IOException {
         String id = "";
         String version = "";

@@ -115,4 +115,17 @@ public final class Prefs {
     public static void setActiveChain(Context context, String name) {
         prefs(context).edit().putString("active_chain", name).apply();
     }
+
+    /**
+     * APK update time that the bundled plugin packages were last copied for.
+     * Zero means "never synced", so the first service start after install (or
+     * after upgrading from a build without this bookkeeping) refreshes them.
+     */
+    public static long bundledStamp(Context context) {
+        return prefs(context).getLong("bundled_stamp", 0L);
+    }
+
+    public static void setBundledStamp(Context context, long value) {
+        prefs(context).edit().putLong("bundled_stamp", value).apply();
+    }
 }

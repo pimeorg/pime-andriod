@@ -64,3 +64,41 @@ dependencies {
     implementation "androidx.transition:transition:1.5.0"
     implementation "com.google.android.material:material:1.12.0"
 }
+
+/*
+ * Bundled plugin packages are copied from the first-party build output as whole
+ * directories. A manifest declares the data files a plugin needs; shipping the
+ * package without them makes a fail-closed plugin return PIME_NOT_FOUND and
+ * aborts the whole chain, so catch that at build time instead of on a device.
+ */
+tasks.register("checkBundledPluginAssets") {
+    group = "verification"
+    description = "Verifies every bundled plugin package ships the assets its manifest declares."
+    doLast {
+        def plugins = file("src/main/assets/plugins")
+        def missing = []
+        if (plugins.isDirectory()) {
+            plugins.eachDir { pkg ->
+                def manifest = new File(pkg, "manifest.yaml")
+                if (!manifest.isFile()) return
+                def matcher = manifest.getText("UTF-8") =~ /(?m)^assets:\s*\[([^\]]*)\]/
+                if (!matcher.find()) return
+                matcher.group(1).split(",").each { entry ->
+                    def name = entry.trim()
+                    if (name && !new File(new File(pkg, "assets"), name).isFile()) {
+                        missing << "${pkg.name}/assets/${name}"
+                    }
+                }
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                    "Bundled plugin manifests declare missing assets:\n  "
+                    + missing.join("\n  "))
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn tasks.named("checkBundledPluginAssets")
+}

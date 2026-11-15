@@ -119,3 +119,10 @@
       展开面板显示完整描述；未安装的链内插件不显示描述
 - [ ] arm64 物理设备验证
 - [ ] release 签名与混淆
+- [x] 修复内置插件包资产缺失：`pinyin.collocations` 与 predict-context 两个 TSV；
+      插件 CMake `ASSETS` 补齐并重出包
+- [x] APK 更新时刷新内置插件包与 core 的 `<id>/<version>` 副本，旧安装无需
+      `pm clear`
+- [x] 构建期 `checkBundledPluginAssets`：manifest 声明的资产缺一即失败
+- [x] `pime-hans-hant` 默认关闭，中文候选不再默认变繁体
+- [x] MuMu 实测 `nihao` → 你好、`dianhua` → 电话，logcat 无 `NOT_FOUND`

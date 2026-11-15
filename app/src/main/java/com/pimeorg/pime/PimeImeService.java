@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -27,6 +28,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -783,13 +785,29 @@ public final class PimeImeService extends InputMethodService
         }
     }
 
-    /** Copies assets/plugins/<id>/ and assets/chains/ on first run. */
+    /**
+     * Copies assets/plugins/&lt;package&gt;/ and assets/chains/ into files/.
+     *
+     * <p>Bundled plugin packages are refreshed whenever the APK changes: an
+     * upgrade may fix a package (assets, manifest) on an existing install, and
+     * a same-version rebuild would otherwise stay invisible because core's
+     * own installed copy refuses a different code hash. Chains keep the
+     * "copy only when missing" rule so user edits survive upgrades.
+     */
     private void installBundled(File pluginDir, File chainDir) {
         final AssetManager assets = getAssets();
+        final long stamp = packageStamp();
+        final boolean refresh = Prefs.bundledStamp(this) != stamp;
+        boolean complete = true;
         try {
             for (String name : assets.list("plugins")) {
                 final File target = new File(pluginDir, name);
-                if (!target.exists()) copyAssetTree("plugins/" + name, target);
+                if (target.exists() && !refresh) continue;
+                if (target.exists()) {
+                    PluginStore.deleteTree(target);
+                    removeInstalledCopy(pluginDir, "plugins/" + name);
+                }
+                copyAssetTree("plugins/" + name, target);
             }
             for (String name : assets.list("chains")) {
                 if (!name.endsWith(".cbor")) continue;
@@ -797,7 +815,52 @@ public final class PimeImeService extends InputMethodService
                 if (!target.exists()) copyAssetTree("chains/" + name, target);
             }
         } catch (IOException error) {
+            complete = false;
             Log.w(TAG, "bundled assets unavailable", error);
+        }
+        if (complete && refresh) Prefs.setBundledStamp(this, stamp);
+    }
+
+    /** The APK's last update time, used as the bundled-package sync stamp. */
+    private long packageStamp() {
+        try {
+            return getPackageManager()
+                    .getPackageInfo(getPackageName(), 0).lastUpdateTime;
+        } catch (PackageManager.NameNotFoundException error) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Deletes core's installed copy of a bundled package at
+     * {@code <pluginDir>/<id>/<version>}. Core refuses to replace a
+     * same-version package whose code hash changed, so the copy has to go
+     * before the refreshed bundle is loaded again.
+     */
+    private void removeInstalledCopy(File pluginDir, String assetPath)
+            throws IOException {
+        final String text = readAssetText(assetPath + "/manifest.yaml");
+        final PluginStore.Manifest manifest =
+                PluginStore.parseManifestText(this, text);
+        final File installed =
+                new File(new File(pluginDir, manifest.id), manifest.version);
+        PluginStore.deleteTree(installed);
+        final File parent = installed.getParentFile();
+        final String[] siblings = parent != null ? parent.list() : null;
+        if (parent != null && siblings != null && siblings.length == 0) {
+            parent.delete();
+        }
+    }
+
+    private String readAssetText(String assetPath) throws IOException {
+        try (InputStream input = getAssets().open(assetPath)) {
+            final ByteArrayOutputStream output = new ByteArrayOutputStream();
+            final byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) > 0) {
+                output.write(buffer, 0, read);
+            }
+            return output.toString("UTF-8");
         }
     }
 

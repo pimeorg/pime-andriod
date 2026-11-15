@@ -762,3 +762,44 @@ MuMu 12（Android 15 / x86_64）实测：中文组合 `h` 时点「中/英」，
   都在 `role · version` 下显示描述（如“默认键位：把控制键映射为链内动作，
   文本键放行”），未启用区的 `pime-english-parse` / `pime-english-translate`
   同样显示；展开插件后描述以完整两行出现在 id 上方。
+
+## 中文候选不可用 / 内置插件包资产（2026-11-15）
+
+用户问“当前中文候选词质量为什么很低”。实测发现不是排序差，而是中文链在第一个
+translate 插件就失败：按 `a` 时 logcat 是 `key 97: NOT_FOUND`，字段里只落下原字母，
+没有组合串和候选。
+
+### 根因
+
+- `pime-pinyin-translate 1.2.2` 的 manifest 声明
+  `assets: [pinyin.dict, pinyin.collocations]`，但插件源码的
+  `CMakeLists.txt` 只打 `ASSETS assets/pinyin.dict`，构建出的包缺
+  `pinyin.collocations`；Android 仓库只是原样镜像了这个残缺包。
+- 插件在 `collocation_weight != 0`（默认 500）时 fail-closed，缺资产直接
+  `PIME_NOT_FOUND`；core 的 `run_event` 遇到任一插件错误会中断整条链。
+- `pime-predict-context 1.1.0` 同样声明了 `continuation.tsv` /
+  `collocations.tsv`，包里却没有 `assets/`（它容错，只让联想空转）。
+- `PimeImeService.installBundled()` 只在目标目录不存在时复制，APK 升级不会
+  更新 `files/plugins`，所以即使包修好了，老安装也看不到。
+
+### 改动
+
+- `pime-public-plugin`：两个插件 CMake 的 `ASSETS` 补齐；重出包并把
+  `pinyin-translate 1.2.2` / `predict-context 1.1.0` 整个包目录同步到
+  `app/src/main/assets/plugins/`。
+- APK 更新时刷新内置插件包：`installBundled()` 用 APK `lastUpdateTime` 做
+  同步戳（`Prefs.bundledStamp`），变化时删除旧包与 core 的
+  `<id>/<version>` 副本后重拷；链文件仍只在缺失时复制，保留用户改动。
+- `app/build.gradle` 新增 `checkBundledPluginAssets`，在 `preBuild` 前校验
+  每个内置包 manifest 声明的资产确实存在；缺失时构建失败。
+- `pime-hans-hant` 的 `enabled` 默认改为 `false`：它是可选的简→繁转换，
+  默认开启会把默认链的简体候选整体改写成繁体（`dianhua` → 電話）。
+
+### 验证
+
+- `checkBundledPluginAssets` 通过；临时移走 `pinyin.collocations` 时构建
+  按预期失败并指出具体路径。
+- MuMu 12（Android 15 / x86_64）：`nihao` → 你好/您好/年好…；
+  `dianhua` → 电话（简体）；logcat 不再出现 `NOT_FOUND`；设备上
+  `files/plugins/pime-pinyin-translate/1.2.2/assets/` 已含
+  `pinyin.collocations`，`pime-predict-context/1.1.0/assets/` 已含两个 TSV。
