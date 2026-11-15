@@ -42,12 +42,19 @@ public final class KeyboardView extends View {
         public final int code;
         public final float weight;
         public final int kind;
+        /** Small label under the key (the digit a swipe up types). */
+        public final String hint;
 
         Key(String label, int code, float weight, int kind) {
+            this(label, code, weight, kind, null);
+        }
+
+        Key(String label, int code, float weight, int kind, String hint) {
             this.label = label;
             this.code = code;
             this.weight = weight;
             this.kind = kind;
+            this.hint = hint;
         }
 
         public boolean isLetter() {
@@ -86,6 +93,12 @@ public final class KeyboardView extends View {
     private final RectF edgeRect = new RectF();
     private final Handler repeatHandler = new Handler(Looper.getMainLooper());
     private Key repeatKey;
+    /** Digit keys emitted by a swipe up; built once so the gesture allocates nothing. */
+    private final Key[] digitKeys = new Key[10];
+    private float downX;
+    private float downY;
+    private int downRow = -1;
+    private int downCol = -1;
 
     private final Runnable repeatRunnable = new Runnable() {
         @Override
@@ -108,6 +121,10 @@ public final class KeyboardView extends View {
         glyphPaint.setStyle(Paint.Style.STROKE);
         glyphPaint.setStrokeCap(Paint.Cap.ROUND);
         glyphPaint.setStrokeJoin(Paint.Join.ROUND);
+        for (int i = 0; i < digitKeys.length; ++i) {
+            final char digit = (char) ('0' + i);
+            digitKeys[i] = new Key(String.valueOf(digit), digit, 1f, KIND_CHAR);
+        }
         buildPages();
         setFocusable(true);
     }
@@ -150,7 +167,9 @@ public final class KeyboardView extends View {
 
     private List<List<Key>> letterPage() {
         final List<List<Key>> rows = new ArrayList<>(4);
-        rows.add(chars("qwertyuiop"));
+        /* The top row carries the digits a swipe up types, like WeaveText's
+         * QWERTY hints. The other rows stay clean: there are only ten digits. */
+        rows.add(chars("qwertyuiop", "1234567890"));
         rows.add(chars("asdfghjkl"));
 
         final List<Key> third = new ArrayList<>();
@@ -191,10 +210,16 @@ public final class KeyboardView extends View {
     }
 
     private static List<Key> chars(String letters) {
+        return chars(letters, null);
+    }
+
+    private static List<Key> chars(String letters, String hints) {
         final List<Key> keys = new ArrayList<>(letters.length());
         for (int i = 0; i < letters.length(); ++i) {
             final char c = letters.charAt(i);
-            keys.add(new Key(String.valueOf(c), c, 1f, KIND_CHAR));
+            final String hint = hints != null && i < hints.length()
+                    ? String.valueOf(hints.charAt(i)) : null;
+            keys.add(new Key(String.valueOf(c), c, 1f, KIND_CHAR, hint));
         }
         return keys;
     }
@@ -307,22 +332,46 @@ public final class KeyboardView extends View {
                 drawEnter(canvas, cx, cy, label);
                 break;
             default:
-                drawLabel(canvas, key, cx, cy, label, onAccent);
+                drawLabel(canvas, key, keyRect, label, onAccent);
                 break;
         }
     }
 
-    private void drawLabel(Canvas canvas, Key key, float cx, float cy,
-                           int color, boolean onAccent) {
+    private void drawLabel(Canvas canvas, Key key, RectF rect, int color,
+                           boolean onAccent) {
         String label = key.label;
         if (shift && key.isLetter()) label = label.toUpperCase();
-        final float sp = label.length() > 1 ? 15f : 22f;
-        textPaint.setTextSize(sp * getResources().getDisplayMetrics().scaledDensity);
+        final float scaled = getResources().getDisplayMetrics().scaledDensity;
+        float size = (label.length() > 1 ? 15f : 22f) * scaled;
+        float centerY = rect.centerY();
+        if (key.hint != null && key.kind == KIND_CHAR) {
+            /* Leave a band at the bottom for the digit and keep the letter
+             * above it; both sizes follow the key height so landscape rows do
+             * not collide. */
+            final float hintSize = Math.min(11f * scaled, rect.height() * 0.22f);
+            final float band = hintSize * 1.1f + dp(4);
+            size = Math.min(22f * scaled, rect.height() * 0.42f);
+            centerY = rect.top + (rect.height() - band) / 2f;
+        }
+        textPaint.setTextSize(size);
         textPaint.setColor(color);
         textPaint.setFakeBoldText(onAccent || (shift && !key.isLetter()));
         final Paint.FontMetrics metrics = textPaint.getFontMetrics();
-        canvas.drawText(label, cx, cy - (metrics.ascent + metrics.descent) / 2f,
-                textPaint);
+        canvas.drawText(label, rect.centerX(),
+                centerY - (metrics.ascent + metrics.descent) / 2f, textPaint);
+        if (key.hint != null) drawHint(canvas, key.hint, rect);
+    }
+
+    /** The muted digit under a letter; a swipe up on that key types it. */
+    private void drawHint(Canvas canvas, String hint, RectF rect) {
+        final float scaled = getResources().getDisplayMetrics().scaledDensity;
+        final float size = Math.min(11f * scaled, rect.height() * 0.22f);
+        textPaint.setTextSize(size);
+        textPaint.setColor(theme.hint);
+        textPaint.setFakeBoldText(false);
+        final Paint.FontMetrics metrics = textPaint.getFontMetrics();
+        canvas.drawText(hint, rect.centerX(),
+                rect.bottom - dp(4) - metrics.descent, textPaint);
     }
 
     private void drawShift(Canvas canvas, float cx, float cy, int color) {
@@ -387,6 +436,10 @@ public final class KeyboardView extends View {
                 if (hit == null) return false;
                 pressedRow = hit[0];
                 pressedCol = hit[1];
+                downRow = hit[0];
+                downCol = hit[1];
+                downX = event.getX();
+                downY = event.getY();
                 invalidate();
                 if (row(pressedRow).get(pressedCol).kind == KIND_BACKSPACE) {
                     repeatKey = row(pressedRow).get(pressedCol);
@@ -395,6 +448,18 @@ public final class KeyboardView extends View {
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
+                /* Keep the starting key lit while the finger is above it: a
+                 * swipe up leaves the key bounds (the top row has no row above),
+                 * and hit testing would drop the press before ACTION_UP. */
+                if (downRow >= 0 && isSwipeUp(pages[page].get(downRow).get(downCol),
+                        downRow, downCol, event.getX(), event.getY())) {
+                    if (pressedRow != downRow || pressedCol != downCol) {
+                        pressedRow = downRow;
+                        pressedCol = downCol;
+                        invalidate();
+                    }
+                    return true;
+                }
                 if (pressedRow < 0) return false;
                 int[] hit = hitTest(event.getX(), event.getY());
                 int r = hit == null ? -1 : hit[0];
@@ -407,7 +472,19 @@ public final class KeyboardView extends View {
                 return true;
             }
             case MotionEvent.ACTION_UP: {
-                if (pressedRow < 0) return false;
+                final Key start = downRow >= 0
+                        ? pages[page].get(downRow).get(downCol) : null;
+                if (isSwipeUp(start, downRow, downCol,
+                        event.getX(), event.getY())) {
+                    final char digit = start.hint.charAt(0);
+                    clearPressed();
+                    fire(digitKeys[digit - '0']);
+                    return true;
+                }
+                if (pressedRow < 0) {
+                    clearPressed();
+                    return false;
+                }
                 int[] hit = hitTest(event.getX(), event.getY());
                 final boolean same = hit != null && hit[0] == pressedRow
                         && hit[1] == pressedCol;
@@ -427,9 +504,27 @@ public final class KeyboardView extends View {
     private void clearPressed() {
         pressedRow = -1;
         pressedCol = -1;
+        downRow = -1;
+        downCol = -1;
         repeatKey = null;
         repeatHandler.removeCallbacks(repeatRunnable);
         invalidate();
+    }
+
+    /**
+     * A swipe up must be long and clearly vertical, and must start on a key with
+     * a digit hint, so fast horizontal typing never turns a letter into a digit.
+     */
+    private boolean isSwipeUp(Key key, int row, int col, float x, float y) {
+        if (key == null || key.hint == null || bounds == null
+                || row < 0 || row >= bounds.length
+                || col < 0 || col >= bounds[row].length) {
+            return false;
+        }
+        final float up = downY - y;
+        final float side = Math.abs(x - downX);
+        final float min = Math.max(dp(28), bounds[row][col].height() * 0.55f);
+        return up >= min && up > 1.5f * side;
     }
 
     private void fire(Key key) {

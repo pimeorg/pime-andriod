@@ -101,7 +101,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 空链（`{"plugins": []}`）合法：所有按键返回 unhandled，由 Java 层交给编辑器。
 - 顶栏工具栏只做宿主动作：页切换、粘贴剪贴板纯文本、打开设置、收起键盘；
   粘贴在组合中会先结束组合并清掉候选，避免 `commitText` 顶掉正在输入的内容。
-  主题或键盘高度变化时设置页广播 `ACTION_DISPLAY_CHANGED`，运行中的输入服务
+- 上滑数字只认首行字母键：竖向位移至少 `max(28dp, 0.55 × 键高)`，且大于
+  横向位移的 1.5 倍；不满足时按普通字母处理，快速连打不会把字母变成数字。
+- 主题或键盘高度变化时设置页广播 `ACTION_DISPLAY_CHANGED`，运行中的输入服务
   重建输入视图并保留组合串与候选。
 - `onStartInput` 设置上下文（app_id、field_type、locale=zh_CN、page_size=20、
   `CANDIDATES|TOUCH|SECURE`），密码框同时置 secure。
@@ -117,6 +119,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 未在 arm64 物理设备上验证；已在 MuMu 12（Android 15 / API 35 / x86_64）上
   跑通插件加载、`nihao → 你好` 候选与提交。
 - 软键盘布局为字母/符号两页（字母、数字、Shift、退格、空格、回车、标点）。
+  字母页首行 q–p 的键下方标有 1–0，上滑该键键入对应数字；其余行没有数字副标签。
   顶栏是工具栏：字母/符号页切换、粘贴、键盘设置、收起；组合串与候选共用
   工具栏下方的一行，没有组合与候选时该行隐藏。
 
