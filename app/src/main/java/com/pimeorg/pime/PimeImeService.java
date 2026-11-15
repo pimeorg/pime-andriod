@@ -93,6 +93,12 @@ public final class PimeImeService extends InputMethodService
     private int[] compositionStarts = new int[0];
     private int[] compositionEnds = new int[0];
     private final List<String> candidates = new ArrayList<>();
+    /**
+     * Set by {@link #onCommit} while a chain key runs. A digit that picks a
+     * candidate commits without the parsers' commit phase, so the host has to
+     * tell them the composition ended once the key returns.
+     */
+    private boolean commitSeen;
     private BroadcastReceiver rebuildReceiver;
 
     /**
@@ -528,6 +534,7 @@ public final class PimeImeService extends InputMethodService
             if (english && endsEnglishComposition(key)) {
                 if (commitEnglishCompositionThen(text)) return;
             }
+            commitSeen = false;
             final int status = core.key(key.code,
                     shifted ? PimeCore.MOD_SHIFT : 0, PimeCore.KEY_DOWN, text);
             core.pump();
@@ -535,6 +542,7 @@ public final class PimeImeService extends InputMethodService
                 /* The chain confirms the typed word on space; the space the
                  * user pressed belongs in the editor, not in the candidate. */
                 if (english && key.kind == KeyboardView.KIND_SPACE) appendSpace();
+                if (isCandidateDigit(key)) resetAfterCommit();
                 return;
             }
             if (status < 0) {
@@ -618,10 +626,34 @@ public final class PimeImeService extends InputMethodService
     private void selectCandidate(int index) {
         if (!coreReady || !core.hasSession()) return;
         final char digit = (char) ('1' + index);
+        commitSeen = false;
         final int status = core.key(digit, 0, PimeCore.KEY_DOWN,
                 String.valueOf(digit));
         core.pump();
         if (status < 0) Log.w(TAG, "candidate " + index + ": " + text(-status));
+        resetAfterCommit();
+    }
+
+    /** True for the digits the chain uses to pick a candidate by slot. */
+    private static boolean isCandidateDigit(KeyboardView.Key key) {
+        return key.kind == KeyboardView.KIND_CHAR
+                && key.code >= '1' && key.code <= '9';
+    }
+
+    /**
+     * A digit selection commits in candidates-format, which never sends the
+     * parsers a commit phase: their session state would still hold the word
+     * that was just committed, and the next key would resume it (pick
+     * `Google` for `goog`, then type `l` and get `googl`). `reset` is the
+     * chain contract for "the composition is gone", so the buffers are
+     * dropped the same way the old `candidate` host event dropped them.
+     */
+    private void resetAfterCommit() {
+        if (!commitSeen) return;
+        commitSeen = false;
+        if (!coreReady || !core.hasSession()) return;
+        report(core.reset(), "reset");
+        core.pump();
     }
 
     private void pageCandidates(int keyCode) {
@@ -683,6 +715,7 @@ public final class PimeImeService extends InputMethodService
 
     @Override
     public void onCommit(String text) {
+        commitSeen = true;
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null && text != null && !text.isEmpty()) ic.commitText(text, 1);
         composition = "";

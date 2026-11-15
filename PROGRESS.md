@@ -837,3 +837,38 @@ translate 插件就失败：按 `a` 时 logcat 是 `key 97: NOT_FOUND`，字段�
 - 纯拼音 `nihao` 等不受影响（`complete=true` 时不查英文词表）。
 - 插件侧 281 条用例全过、conformance ok；APK 升级后 `files/chains/default.cbor`
   自动换成新链，无需清除应用数据。
+
+## 候选点选后的组合状态残留（2026-11-15）
+
+用户反馈：中文状态输入 `goog`，候选里出现 `Google`，点选提交后输入法仍把
+`goog` 当作正在输入的码串，再按 `l` 会接着得到 `googl`。
+
+### 根因
+
+- 上一轮为了翻页后的正确选词，候选点击从 `pime_core_candidate`（事件类型
+  `candidate`）改成发数字键（keymap 映射为 `action=digit`，format 按页内偏移
+  提交）。
+- parse 插件只在 `candidate` / 空格 / 回车这些“提交阶段”清空自己的 `state.buf`；
+  数字键走到 parse 时 `append()` 不接受数字，缓冲原样保留，而提交发生在下游的
+  candidates-format。旧的 `candidate` 事件会把缓冲清掉，换用数字键后这条语义丢了。
+- 于是提交虽然成功，链的会话状态里仍是提交前的码串，下一次按键在旧码上继续拼接。
+  中文候选、英文候选、符号页数字选词都受影响。
+
+### 改动（`PimeImeService.java`）
+
+- `onCommit` 在链按键调用期间置 `commitSeen`；`selectCandidate` 与 `onKey` 的
+  数字键路径在按键返回后检查它。
+- 只有确实发生提交时才发 `reset()` 再 `pump()`：`reset` 是链契约里的“组合结束/
+  宿主取消组合”，parse 清缓冲、format 清页码；v-mode 数字、页码越界等没有提交的
+  情况不会被误清。
+- 不在 `onCommit` 里直接 reset：sink 回调发生在 core 的 `run_event` 内，重入
+  core 不安全，所以放到按键返回之后。
+
+### 实测（MuMu 12 / Android 15 / x86_64）
+
+- 中文混输：`goog` → 候选 `goog / Google / 够欧冠 / 工欧冠`，点 `Google` 提交
+  后拼音行与候选栏清空；再按 `l`，拼音行为 `l`（不再是 `googl`）。
+- 中文：`nihao` → 点 `你好` → 按 `n`，拼音行为 `n`。
+- 英文：`hel` → 点 `help` → 按 `p`，拼音行为 `p`。
+- 数字选词：英文组合 `p` 时切符号页按 `2` 提交 `people`，返回字母页按 `p`，
+  拼音行为 `p`。
