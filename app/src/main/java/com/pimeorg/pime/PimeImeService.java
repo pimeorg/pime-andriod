@@ -82,6 +82,9 @@ public final class PimeImeService extends InputMethodService
     private HorizontalScrollView candidateScroll;
     private TextView compositionView;
     private String composition = "";
+    /** Syllable bounds in the composition, in UTF-16 units; empty when unknown. */
+    private int[] compositionStarts = new int[0];
+    private int[] compositionEnds = new int[0];
     private final List<String> candidates = new ArrayList<>();
     private BroadcastReceiver rebuildReceiver;
 
@@ -397,7 +400,7 @@ public final class PimeImeService extends InputMethodService
     private void refreshInputView() {
         if (keyboard == null) return;
         setInputView(onCreateInputView());
-        compositionView.setText(composition);
+        renderComposition();
         updateCandidateRow();
         if (!candidates.isEmpty()) onCandidates(candidates.toArray(new String[0]));
     }
@@ -513,9 +516,11 @@ public final class PimeImeService extends InputMethodService
     /* PimeCore.Listener */
 
     @Override
-    public void onComposition(String text, int cursor) {
+    public void onComposition(String text, int cursor, int[] starts, int[] ends) {
         composition = text == null ? "" : text;
-        if (compositionView != null) compositionView.setText(composition);
+        compositionStarts = starts == null ? new int[0] : starts;
+        compositionEnds = ends == null ? new int[0] : ends;
+        renderComposition();
         updateCandidateRow();
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
@@ -527,6 +532,33 @@ public final class PimeImeService extends InputMethodService
         } else {
             ic.setComposingText(text, Math.max(1, cursor + 1));
         }
+    }
+
+    /**
+     * The preedit above the candidates may separate syllables with the host
+     * preference; the editor's composing text stays exactly as the chain sent
+     * it, because separators there would become part of the actual input.
+     */
+    private void renderComposition() {
+        if (compositionView == null) return;
+        compositionView.setText(composition.isEmpty() ? "" : separatedComposition());
+    }
+
+    private String separatedComposition() {
+        final int count = Math.min(compositionStarts.length, compositionEnds.length);
+        if (count < 2) return composition;
+        final boolean space = Prefs.SEPARATOR_SPACE.equals(Prefs.pinyinSeparator(this));
+        final StringBuilder out = new StringBuilder(composition.length() + count);
+        for (int i = 0; i < count; ++i) {
+            final int start = compositionStarts[i];
+            final int end = compositionEnds[i];
+            if (start < 0 || end < start || end > composition.length()) {
+                return composition;
+            }
+            if (i > 0) out.append(space ? ' ' : '\'');
+            out.append(composition, start, end);
+        }
+        return out.toString();
     }
 
     @Override

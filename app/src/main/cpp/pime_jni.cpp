@@ -17,6 +17,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -208,14 +209,46 @@ bool clear_exception(JNIEnv* env) {
 pime_status sink_composition(void*, const pime_composition* composition) {
     Env env;
     if (!env.get() || !g_bridge || !composition) return PIME_OK;
-    jstring text = to_jstring(env.get(), composition->text, composition->text_len);
+    JNIEnv* jni = env.get();
+    jstring text = to_jstring(jni, composition->text, composition->text_len);
     if (!text) return PIME_INVALID;
     const uint32_t cursor = utf16_units(composition->text, composition->text_len,
                                         composition->cursor);
-    env->CallVoidMethod(g_bridge, g_mid_composition, text,
-                        static_cast<jint>(cursor));
-    env->DeleteLocalRef(text);
-    return clear_exception(env.get()) ? PIME_INVALID : PIME_OK;
+    /* Syllable segments stay as UTF-16 offsets so the Java layer can draw the
+     * preedit with its own separator without re-parsing pinyin. */
+    const uint32_t count = composition->segment_count;
+    jintArray starts = nullptr;
+    jintArray ends = nullptr;
+    if (count > 0 && composition->segments) {
+        std::vector<jint> starts_buf(count);
+        std::vector<jint> ends_buf(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            starts_buf[i] = static_cast<jint>(utf16_units(
+                    composition->text, composition->text_len,
+                    composition->segments[i].start));
+            ends_buf[i] = static_cast<jint>(utf16_units(
+                    composition->text, composition->text_len,
+                    composition->segments[i].end));
+        }
+        starts = jni->NewIntArray(static_cast<jsize>(count));
+        ends = jni->NewIntArray(static_cast<jsize>(count));
+        if (!starts || !ends) {
+            if (starts) jni->DeleteLocalRef(starts);
+            if (ends) jni->DeleteLocalRef(ends);
+            jni->DeleteLocalRef(text);
+            return PIME_INVALID;
+        }
+        jni->SetIntArrayRegion(starts, 0, static_cast<jsize>(count),
+                               starts_buf.data());
+        jni->SetIntArrayRegion(ends, 0, static_cast<jsize>(count),
+                               ends_buf.data());
+    }
+    jni->CallVoidMethod(g_bridge, g_mid_composition, text,
+                        static_cast<jint>(cursor), starts, ends);
+    if (starts) jni->DeleteLocalRef(starts);
+    if (ends) jni->DeleteLocalRef(ends);
+    jni->DeleteLocalRef(text);
+    return clear_exception(jni) ? PIME_INVALID : PIME_OK;
 }
 
 pime_status sink_commit(void*, const pime_text* text) {
@@ -325,7 +358,7 @@ Java_com_pimeorg_pime_PimeCore_nativeStart(JNIEnv* env, jobject thiz,
         return 0;
     }
     g_mid_composition = env->GetMethodID(g_bridge_class, "onNativeComposition",
-                                         "(Ljava/lang/String;I)V");
+                                         "(Ljava/lang/String;I[I[I)V");
     g_mid_commit = env->GetMethodID(g_bridge_class, "onNativeCommit",
                                     "(Ljava/lang/String;)V");
     g_mid_candidates = env->GetMethodID(g_bridge_class, "onNativeCandidates",

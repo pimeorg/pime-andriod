@@ -15,6 +15,10 @@ public final class Prefs {
     public static final String THEME_LIGHT = "light";
     public static final String THEME_DARK = "dark";
 
+    /** Apostrophe or space between the syllables shown in the preedit line. */
+    public static final String SEPARATOR_APOSTROPHE = "apostrophe";
+    public static final String SEPARATOR_SPACE = "space";
+
     /** Compact / standard / roomy keyboard height, in percent of the base size. */
     public static final int[] KEYBOARD_PERCENTS = {88, 100, 115};
 
@@ -55,6 +59,15 @@ public final class Prefs {
 
     public static void setCandidates(Context context, int value) {
         prefs(context).edit().putInt("candidates", value).apply();
+    }
+
+    /** Display-only separator; the editor's composing text stays as typed. */
+    public static String pinyinSeparator(Context context) {
+        return prefs(context).getString("pinyin_separator", SEPARATOR_APOSTROPHE);
+    }
+
+    public static void setPinyinSeparator(Context context, String value) {
+        prefs(context).edit().putString("pinyin_separator", value).apply();
     }
 
     public static boolean vibrate(Context context) {

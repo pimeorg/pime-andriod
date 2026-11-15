@@ -1194,6 +1194,11 @@ public final class SettingsActivity extends AppCompatActivity {
                     candidatesLabel(Prefs.candidates(this)),
                     R.drawable.ic_chevron_right, v -> chooseCandidates());
             addDivider(display);
+            addRow(display, R.drawable.ic_separator,
+                    getString(R.string.row_pinyin_separator),
+                    separatorLabel(Prefs.pinyinSeparator(this)),
+                    R.drawable.ic_chevron_right, v -> chooseSeparator());
+            addDivider(display);
             addRow(display, R.drawable.ic_contrast, getString(R.string.row_theme),
                     themeLabel(Prefs.theme(this)), R.drawable.ic_chevron_right,
                     v -> chooseTheme());
@@ -1217,6 +1222,11 @@ public final class SettingsActivity extends AppCompatActivity {
     private CharSequence candidatesLabel(int count) {
         return count <= 0 ? getString(R.string.candidates_all)
                 : getString(R.string.candidates_value, count);
+    }
+
+    private CharSequence separatorLabel(String separator) {
+        return getString(Prefs.SEPARATOR_SPACE.equals(separator)
+                ? R.string.separator_space : R.string.separator_apostrophe);
     }
 
     private CharSequence themeLabel(String theme) {
@@ -1254,6 +1264,24 @@ public final class SettingsActivity extends AppCompatActivity {
                     dialog.dismiss();
                     rebuildDetail();
                 });
+    }
+
+    private void chooseSeparator() {
+        final String[] values = {
+                Prefs.SEPARATOR_APOSTROPHE, Prefs.SEPARATOR_SPACE
+        };
+        final CharSequence[] labels = {
+                getString(R.string.separator_apostrophe),
+                getString(R.string.separator_space)
+        };
+        final int selected = Prefs.SEPARATOR_SPACE.equals(Prefs.pinyinSeparator(this))
+                ? 1 : 0;
+        choose(R.string.row_pinyin_separator, labels, selected, (dialog, which) -> {
+            Prefs.setPinyinSeparator(this, values[which]);
+            broadcastDisplayChanged();
+            dialog.dismiss();
+            rebuildDetail();
+        });
     }
 
     private void chooseTheme() {

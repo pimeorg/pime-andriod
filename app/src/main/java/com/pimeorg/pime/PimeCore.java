@@ -46,7 +46,12 @@ public final class PimeCore {
     public static final int HOST_TOUCH = 1 << 5;
 
     public interface Listener {
-        void onComposition(String text, int cursor);
+        /**
+         * @param starts syllable start offsets, in UTF-16 units, or null when
+         *               the chain reported no segments
+         * @param ends   syllable end offsets, in UTF-16 units
+         */
+        void onComposition(String text, int cursor, int[] starts, int[] ends);
 
         void onCommit(String text);
 
@@ -194,8 +199,9 @@ public final class PimeCore {
 
     /* Called from native on the owner thread. */
 
-    private void onNativeComposition(String text, int cursor) {
-        if (listener != null) listener.onComposition(text, cursor);
+    private void onNativeComposition(String text, int cursor, int[] starts,
+                                     int[] ends) {
+        if (listener != null) listener.onComposition(text, cursor, starts, ends);
     }
 
     private void onNativeCommit(String text) {

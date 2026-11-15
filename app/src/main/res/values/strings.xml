@@ -30,7 +30,7 @@
     <string name="row_ime">输入法设置</string>
     <string name="row_ime_desc">启用、切换与系统输入设置</string>
     <string name="row_settings">键盘与候选</string>
-    <string name="row_settings_desc">高度、按键反馈、候选数量与主题</string>
+    <string name="row_settings_desc">高度、按键反馈、拼音分隔、候选与主题</string>
     <string name="row_plugins">插件与链</string>
     <string name="row_storage">存储位置</string>
 
@@ -84,6 +84,10 @@
     <string name="row_sound_desc">按下按键时播放系统点击音</string>
     <string name="row_candidates">候选数量</string>
     <string name="row_candidates_desc">候选栏最多显示几个候选</string>
+    <string name="row_pinyin_separator">拼音分隔</string>
+    <string name="row_pinyin_separator_desc">组合串里音节之间的分隔符</string>
+    <string name="separator_apostrophe">撇号（\'）</string>
+    <string name="separator_space">空格</string>
     <string name="row_theme">主题</string>
     <string name="row_theme_desc">跟随系统，或固定浅色 / 深色</string>
     <string name="height_compact">紧凑</string>
@@ -95,7 +99,7 @@
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
-    <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏与主题），不改变分词、词典与候选排序——那些由插件链决定。</string>
+    <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏、拼音分隔与主题），不改变分词、词典与候选排序——那些由插件链决定。</string>
 
     <string name="ime_action_settings">键盘设置</string>
     <string name="ime_action_hide">收起键盘</string>
