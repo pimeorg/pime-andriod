@@ -544,3 +544,11 @@ MuMu 12（Android 15 / x86_64）实测通过：`nihao → 你好`、`dz → 地�
 
 期间插件侧修复三个只在 WAMR/Android 暴露的问题（WASM `memset/memcpy`
 未定义导入、v 模式数字被当选词、u 模式被拼写纠正改写），宿主侧只需同步包与链。
+
+### 复验：错拼纠正（2026-11-15）
+
+同步 `pime-pinyin-parse` 1.1.2 / `pime-pinyin-translate` 1.2.1 后复验：
+
+- `xxie`：预编辑保持 `xxie`，候选首位「謝謝」；
+- `xxiex`：候选首位「謝謝」（纠正读法 xiex）；
+- `nihhao`：候选首位「你好」，第三位保留「你好好」。
