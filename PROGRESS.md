@@ -733,3 +733,32 @@ MuMu 12（Android 15 / x86_64）实测：中文组合 `h` 时点「中/英」，
 `pime-predict-context-1.1.0` 在 `onStartInput` 时日志报 `context: NOT_FOUND`：
 该包清单声明了 `continuation.tsv` / `collocations.tsv`，但包里没有这两个资产。
 它在中文链末尾，失败只跳过自身，不影响候选。属插件包内容问题，与本轮无关。
+
+## 插件描述（2026-11-15）
+
+用户指出设置页的插件列表缺少“插件描述”。复查后确认问题只在 Android 外壳：
+`pime-public-plugin` 的 17 个源清单与随包清单早已有 `description`（首行，
+如“全拼解析：音节切分、自动纠错…”），`tools/check_plugins` 也已把它写进
+插件索引；但 `SettingsActivity` 的 `manifestInfo` 只读了 id/version/role，
+页面上只显示“role · version”。
+
+### 改动（`SettingsActivity.java`）
+
+- `manifestInfo` 多读 `description`（去掉一层 YAML 引号），返回
+  `{id, version, role, description}`；构建插件页时按 id 建一次索引，
+  避免每行重复读清单。
+- 链内插件行：`role · version` 下新增描述行，12sp、最多两行、超出省略；
+  行无障碍描述改用新字符串 `plugin_row_desc_described`，把描述一并读出。
+- 未启用插件行同样显示描述；未安装的链内插件不显示（没有清单可读）。
+- 展开面板顶部显示完整描述，下面是原来的插件 id 与链内设置。
+
+描述是随包/导入包自带的清单字段，宿主不再维护第二份文案；插件仓库无需
+改动。
+
+### 验证
+
+- `./gradlew :app:compileDebugJavaWithJavac` 与 `assembleDebug` 通过。
+- MuMu 12（Android 15 / x86_64）实测「插件与链」页：链路顺序里 18 个插件
+  都在 `role · version` 下显示描述（如“默认键位：把控制键映射为链内动作，
+  文本键放行”），未启用区的 `pime-english-parse` / `pime-english-translate`
+  同样显示；展开插件后描述以完整两行出现在 id 上方。

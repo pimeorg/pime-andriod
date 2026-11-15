@@ -115,6 +115,7 @@
     <string name="action_move_up_named">上移「%1$s」</string>
     <string name="action_move_down_named">下移「%1$s」</string>
     <string name="plugin_row_desc">%1$s，%2$s，第 %3$d 步</string>
+    <string name="plugin_row_desc_described">%1$s，%2$s。%3$s，第 %4$d 步</string>
     <string name="plugin_order_changed">已调整「%1$s」的顺序</string>
     <string name="chain_current">使用中</string>
     <string name="chain_switch">点按切换</string>

@@ -59,6 +59,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -351,11 +352,12 @@ public final class SettingsActivity extends AppCompatActivity {
         return result;
     }
 
-    /** Reads id/version/role from a plugin manifest; display only. */
+    /** Reads id/version/role/description from a plugin manifest; display only. */
     private String[] manifestInfo(File dir) {
         String id = null;
         String version = null;
         String role = null;
+        String description = null;
         try (BufferedReader reader = new BufferedReader(new FileReader(new File(dir, "manifest.yaml")))) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -366,12 +368,23 @@ public final class SettingsActivity extends AppCompatActivity {
                 if (key.equals("id")) id = value;
                 else if (key.equals("version")) version = value;
                 else if (key.equals("role")) role = value;
+                else if (key.equals("description")) description = unquote(value);
             }
         } catch (IOException ignored) {
             // Falls back to the directory name below.
         }
         return new String[]{id != null ? id : dir.getName(), version,
-                role != null ? role : getString(R.string.role_unknown)};
+                role != null ? role : getString(R.string.role_unknown),
+                description != null ? description : ""};
+    }
+
+    /** Strips one pair of surrounding YAML quotes, matching PluginStore. */
+    private static String unquote(String value) {
+        if (value.length() >= 2 && (value.startsWith("\"") && value.endsWith("\"")
+                || value.startsWith("'") && value.endsWith("'"))) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 
     // ------------------------------------------------------------------ detail pages
@@ -453,7 +466,12 @@ public final class SettingsActivity extends AppCompatActivity {
         final List<ChainStore.PluginEntry> chainPlugins = readChainSafe(active);
         final File[] installed = pluginDirs();
         final Set<String> installedIds = new HashSet<>();
-        for (File dir : installed) installedIds.add(manifestInfo(dir)[0]);
+        final Map<String, String[]> infoById = new LinkedHashMap<>();
+        for (File dir : installed) {
+            final String[] info = manifestInfo(dir);
+            installedIds.add(info[0]);
+            infoById.put(info[0], info);
+        }
 
         /* --- chain plans --- */
         addGroupTitle(parent, R.string.section_chains);
@@ -483,8 +501,9 @@ public final class SettingsActivity extends AppCompatActivity {
         }
         for (int i = 0; i < chainPlugins.size(); i++) {
             final ChainStore.PluginEntry entry = chainPlugins.get(i);
+            final String[] info = infoById.get(entry.id);
             addChainPluginRow(orderCard, active, entry, i, chainPlugins.size(),
-                    installedIds.contains(entry.id));
+                    installedIds.contains(entry.id), info != null ? info[3] : "");
             if (i != chainPlugins.size() - 1) addDivider(orderCard);
         }
 
@@ -504,7 +523,7 @@ public final class SettingsActivity extends AppCompatActivity {
             final LinearLayout disabledCard = addCard(parent);
             for (int i = 0; i < disabled.size(); i++) {
                 final String[] info = manifestInfo(disabled.get(i));
-                addDisabledPluginRow(disabledCard, active, info[0], info[2], info[1]);
+                addDisabledPluginRow(disabledCard, active, info[0], info[2], info[1], info[3]);
                 if (i != disabled.size() - 1) addDivider(disabledCard);
             }
         }
@@ -540,7 +559,7 @@ public final class SettingsActivity extends AppCompatActivity {
      */
     private void addChainPluginRow(LinearLayout parent, File chain,
                                    ChainStore.PluginEntry entry, int index, int count,
-                                   boolean installed) {
+                                   boolean installed, String description) {
         final boolean expanded = entry.id.equals(expandedPluginId);
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -601,8 +620,20 @@ public final class SettingsActivity extends AppCompatActivity {
         sub.setEllipsize(TextUtils.TruncateAt.END);
         if (!installed) sub.setText(getString(R.string.plugin_missing, subtitle));
         lines.addView(sub);
-        row.setContentDescription(getString(R.string.plugin_row_desc,
-                pluginLabel(entry.id), subtitle, index + 1));
+
+        if (installed && !description.isEmpty()) {
+            final TextView desc = text(description, 12, false,
+                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
+            desc.setMaxLines(2);
+            desc.setEllipsize(TextUtils.TruncateAt.END);
+            desc.setPadding(0, dp(2), 0, 0);
+            lines.addView(desc);
+        }
+        row.setContentDescription(installed && !description.isEmpty()
+                ? getString(R.string.plugin_row_desc_described,
+                        pluginLabel(entry.id), subtitle, description, index + 1)
+                : getString(R.string.plugin_row_desc,
+                        pluginLabel(entry.id), subtitle, index + 1));
 
         final ImageView up = arrowButton(R.drawable.ic_arrow_up,
                 getString(R.string.action_move_up_named, pluginLabel(entry.id)), index != 0,
@@ -628,12 +659,12 @@ public final class SettingsActivity extends AppCompatActivity {
         parent.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        if (expanded) addPluginPanel(parent, chain, entry, installed);
+        if (expanded) addPluginPanel(parent, chain, entry, installed, description);
     }
 
     /** The expanded part of a plugin row: identity plus its chain settings. */
     private void addPluginPanel(LinearLayout parent, File chain, ChainStore.PluginEntry entry,
-                                boolean installed) {
+                                boolean installed, String description) {
         addDivider(parent);
         final LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -641,6 +672,12 @@ public final class SettingsActivity extends AppCompatActivity {
                 com.google.android.material.R.attr.colorSurfaceContainerHigh));
         panel.setPadding(dp(16), dp(12), dp(16), dp(12));
 
+        if (installed && !description.isEmpty()) {
+            final TextView desc = text(description, 13, false,
+                    attrColor(com.google.android.material.R.attr.colorOnSurface));
+            desc.setPadding(0, 0, 0, dp(2));
+            panel.addView(desc);
+        }
         panel.addView(text(entry.id, 12, false,
                 attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
 
@@ -712,7 +749,7 @@ public final class SettingsActivity extends AppCompatActivity {
 
     /** An installed plugin that is not part of the active chain; the switch adds it. */
     private void addDisabledPluginRow(LinearLayout parent, File chain, String id, String role,
-                                      String version) {
+                                      String version, String description) {
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -752,6 +789,15 @@ public final class SettingsActivity extends AppCompatActivity {
         sub.setSingleLine(true);
         sub.setEllipsize(TextUtils.TruncateAt.END);
         lines.addView(sub);
+
+        if (description != null && !description.isEmpty()) {
+            final TextView desc = text(description, 12, false,
+                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
+            desc.setMaxLines(2);
+            desc.setEllipsize(TextUtils.TruncateAt.END);
+            desc.setPadding(0, dp(2), 0, 0);
+            lines.addView(desc);
+        }
 
         final LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
