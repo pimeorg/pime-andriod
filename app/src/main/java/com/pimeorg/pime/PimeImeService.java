@@ -250,6 +250,7 @@ public final class PimeImeService extends InputMethodService
         final int keyboardHeight = keyboardHeight(palette);
         keyboard = new KeyboardView(this);
         keyboard.setKeyboardTheme(palette);
+        keyboard.setEnglish(Prefs.english(this));
         keyboard.setListener(this);
         root.addView(keyboard, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
@@ -300,6 +301,41 @@ public final class PimeImeService extends InputMethodService
     @Override
     public void onPageChanged(boolean symbols) {
         if (toolbar != null) toolbar.setSymbolsActive(symbols);
+    }
+
+    /**
+     * 中/英 is a host mode, not a chain action: English keys are committed
+     * straight to the editor. A composition in flight is committed as raw
+     * letters first (the same thing WeaveText does), so switching does not eat
+     * what was already typed.
+     */
+    @Override
+    public void onLanguageChanged(boolean english) {
+        Prefs.setEnglish(this, english);
+        if (composition.isEmpty()) return;
+        final String raw = composition;
+        if (coreReady) {
+            /* The pinyin buffer lives in the session's plugin state, and the
+             * chain does not consume a `reset` event, so dropping and reopening
+             * the session is the only chain-agnostic way to end the
+             * composition. Otherwise the old letters would come back the next
+             * time the user types in Chinese. */
+            core.closeSession();
+            if (!core.openSession()) {
+                Log.w(TAG, "session reopen failed");
+            } else {
+                final EditorInfo info = getCurrentInputEditorInfo();
+                if (info != null) reportContext(info);
+            }
+        }
+        composition = "";
+        if (compositionView != null) compositionView.setText("");
+        hideCandidates();
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        ic.setComposingText("", 1);
+        ic.finishComposingText();
+        ic.commitText(raw, 1);
     }
 
     /**
@@ -397,6 +433,11 @@ public final class PimeImeService extends InputMethodService
             Log.w(TAG, "session create failed");
             return;
         }
+        reportContext(attribute);
+    }
+
+    /** Context, secure flag and focus for the focused editor. */
+    private void reportContext(EditorInfo attribute) {
         final String app = attribute.packageName == null
                 ? "" : attribute.packageName;
         final boolean password = isPassword(attribute.inputType);
@@ -428,7 +469,9 @@ public final class PimeImeService extends InputMethodService
                 || key.kind == KeyboardView.KIND_SPACE
                 ? String.valueOf(textFor(key, shifted)) : null;
 
-        if (coreReady) {
+        /* English mode is host-side: the chain never sees these keys, so no
+         * pinyin composition can start while the key shows 英. */
+        if (coreReady && (keyboard == null || !keyboard.isEnglish())) {
             final int status = core.key(key.code,
                     shifted ? PimeCore.MOD_SHIFT : 0, PimeCore.KEY_DOWN, text);
             core.pump();

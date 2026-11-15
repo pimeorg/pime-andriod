@@ -81,6 +81,18 @@ public final class Prefs {
         prefs(context).edit().putInt("keyboard_percent", value).apply();
     }
 
+    /**
+     * English is a host mode: keys skip the plugin chain and go straight to the
+     * editor. Persisted so the choice survives the input service restarting.
+     */
+    public static boolean english(Context context) {
+        return prefs(context).getBoolean("english", false);
+    }
+
+    public static void setEnglish(Context context, boolean value) {
+        prefs(context).edit().putBoolean("english", value).apply();
+    }
+
     /** Name of the active chain file (e.g. "default.cbor"); "default.cbor" if unset. */
     public static String activeChain(Context context) {
         return prefs(context).getString("active_chain", "default.cbor");

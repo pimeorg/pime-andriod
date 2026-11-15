@@ -33,6 +33,7 @@ public final class KeyboardView extends View {
     public static final int KIND_ENTER = 4;
     public static final int KIND_SYMBOLS = 5;
     public static final int KIND_LETTERS = 6;
+    public static final int KIND_LANGUAGE = 7;
 
     private static final int PAGE_LETTERS = 0;
     private static final int PAGE_SYMBOLS = 1;
@@ -42,19 +43,26 @@ public final class KeyboardView extends View {
         public final int code;
         public final float weight;
         public final int kind;
-        /** Small label under the key (the digit a swipe up types). */
+        /** Small label under the key (the character a swipe up types). */
         public final String hint;
+        /** Key emitted by a swipe up; null when this key has no swipe output. */
+        public final Key up;
 
         Key(String label, int code, float weight, int kind) {
-            this(label, code, weight, kind, null);
+            this(label, code, weight, kind, null, null);
         }
 
         Key(String label, int code, float weight, int kind, String hint) {
+            this(label, code, weight, kind, hint, null);
+        }
+
+        Key(String label, int code, float weight, int kind, String hint, Key up) {
             this.label = label;
             this.code = code;
             this.weight = weight;
             this.kind = kind;
             this.hint = hint;
+            this.up = up;
         }
 
         public boolean isLetter() {
@@ -71,6 +79,13 @@ public final class KeyboardView extends View {
          */
         default void onPageChanged(boolean symbols) {
         }
+
+        /**
+         * The 中/英 key was tapped. English is a host mode: the service stops
+         * offering keys to the chain and types them straight into the editor.
+         */
+        default void onLanguageChanged(boolean english) {
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -81,6 +96,7 @@ public final class KeyboardView extends View {
     private Listener listener;
     private KeyboardTheme theme;
     private boolean shift;
+    private boolean english;
     private int pressedRow = -1;
     private int pressedCol = -1;
 
@@ -93,8 +109,6 @@ public final class KeyboardView extends View {
     private final RectF edgeRect = new RectF();
     private final Handler repeatHandler = new Handler(Looper.getMainLooper());
     private Key repeatKey;
-    /** Digit keys emitted by a swipe up; built once so the gesture allocates nothing. */
-    private final Key[] digitKeys = new Key[10];
     private float downX;
     private float downY;
     private int downRow = -1;
@@ -121,10 +135,6 @@ public final class KeyboardView extends View {
         glyphPaint.setStyle(Paint.Style.STROKE);
         glyphPaint.setStrokeCap(Paint.Cap.ROUND);
         glyphPaint.setStrokeJoin(Paint.Join.ROUND);
-        for (int i = 0; i < digitKeys.length; ++i) {
-            final char digit = (char) ('0' + i);
-            digitKeys[i] = new Key(String.valueOf(digit), digit, 1f, KIND_CHAR);
-        }
         buildPages();
         setFocusable(true);
     }
@@ -140,6 +150,17 @@ public final class KeyboardView extends View {
 
     public boolean isShiftDown() {
         return shift;
+    }
+
+    /** True while the 中/英 key shows English: keys skip the chain. */
+    public boolean isEnglish() {
+        return english;
+    }
+
+    public void setEnglish(boolean english) {
+        if (this.english == english) return;
+        this.english = english;
+        invalidate();
     }
 
     /** True while the symbols page is showing; the toolbar highlights this. */
@@ -167,22 +188,23 @@ public final class KeyboardView extends View {
 
     private List<List<Key>> letterPage() {
         final List<List<Key>> rows = new ArrayList<>(4);
-        /* The top row carries the digits a swipe up types, like WeaveText's
-         * QWERTY hints. The other rows stay clean: there are only ten digits. */
+        /* Swipe-up hints follow WeaveText's QWERTY map: digits on the top row,
+         * symbols on the two rows below. */
         rows.add(chars("qwertyuiop", "1234567890"));
-        rows.add(chars("asdfghjkl"));
+        rows.add(chars("asdfghjkl", "~!@#%“”*?"));
 
         final List<Key> third = new ArrayList<>();
         third.add(new Key("⇧", 0, 1.5f, KIND_SHIFT));
-        third.addAll(chars("zxcvbnm"));
+        third.addAll(chars("zxcvbnm", "（）-_：；、"));
         third.add(new Key("⌫", 8, 1.5f, KIND_BACKSPACE));
         rows.add(third);
 
         final List<Key> bottom = new ArrayList<>();
         bottom.add(new Key("符", 0, 1.2f, KIND_SYMBOLS));
         bottom.add(new Key(",", ',', 0.9f, KIND_CHAR));
-        bottom.add(new Key("空格", ' ', 4.6f, KIND_SPACE));
+        bottom.add(new Key("空格", ' ', 4.0f, KIND_SPACE));
         bottom.add(new Key(".", '.', 0.9f, KIND_CHAR));
+        bottom.add(new Key("中/英", 0, 1.4f, KIND_LANGUAGE));
         bottom.add(new Key("回车", 13, 1.8f, KIND_ENTER));
         rows.add(bottom);
         return rows;
@@ -202,8 +224,9 @@ public final class KeyboardView extends View {
         final List<Key> bottom = new ArrayList<>();
         bottom.add(new Key("字母", 0, 1.2f, KIND_LETTERS));
         bottom.add(new Key("，", ',', 0.9f, KIND_CHAR));
-        bottom.add(new Key("空格", ' ', 4.6f, KIND_SPACE));
+        bottom.add(new Key("空格", ' ', 4.0f, KIND_SPACE));
         bottom.add(new Key("。", '.', 0.9f, KIND_CHAR));
+        bottom.add(new Key("中/英", 0, 1.4f, KIND_LANGUAGE));
         bottom.add(new Key("回车", 13, 1.8f, KIND_ENTER));
         rows.add(bottom);
         return rows;
@@ -219,7 +242,9 @@ public final class KeyboardView extends View {
             final char c = letters.charAt(i);
             final String hint = hints != null && i < hints.length()
                     ? String.valueOf(hints.charAt(i)) : null;
-            keys.add(new Key(String.valueOf(c), c, 1f, KIND_CHAR, hint));
+            final Key up = hint == null ? null
+                    : new Key(hint, hint.codePointAt(0), 1f, KIND_CHAR);
+            keys.add(new Key(String.valueOf(c), c, 1f, KIND_CHAR, hint, up));
         }
         return keys;
     }
@@ -331,6 +356,9 @@ public final class KeyboardView extends View {
             case KIND_ENTER:
                 drawEnter(canvas, cx, cy, label);
                 break;
+            case KIND_LANGUAGE:
+                drawLanguage(canvas, cx, cy, keyRect);
+                break;
             default:
                 drawLabel(canvas, key, keyRect, label, onAccent);
                 break;
@@ -428,6 +456,51 @@ public final class KeyboardView extends View {
         canvas.drawPath(glyphPath, glyphPaint);
     }
 
+    /**
+     * 中/英 with the active side larger and in the key text colour, the other
+     * muted. The whole label scales down to the key width so a narrow screen
+     * never clips it.
+     */
+    private void drawLanguage(Canvas canvas, float cx, float cy, RectF rect) {
+        final float scaled = getResources().getDisplayMetrics().scaledDensity;
+        final float big = Math.min(16f * scaled, rect.height() * 0.40f);
+        final float small = Math.min(12f * scaled, rect.height() * 0.32f);
+
+        textPaint.setFakeBoldText(false);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setTextSize(big);
+        final float wZh = textPaint.measureText("中");
+        textPaint.setTextSize(small);
+        final float wSlash = textPaint.measureText("/");
+        final float wEn = textPaint.measureText("英");
+        final float total = wZh + wSlash + wEn;
+        final float fit = Math.min(1f, (rect.width() - dp(8)) / total);
+
+        textPaint.setTextSize(big * fit);
+        final Paint.FontMetrics metrics = textPaint.getFontMetrics();
+        final float base = cy - (metrics.ascent + metrics.descent) / 2f;
+        float x = cx - total * fit / 2f;
+
+        textPaint.setTextSize((english ? small : big) * fit);
+        textPaint.setFakeBoldText(!english);
+        textPaint.setColor(english ? theme.hint : theme.keyFuncText);
+        canvas.drawText("中", x, base, textPaint);
+        x += wZh * fit;
+
+        textPaint.setTextSize(small * fit);
+        textPaint.setFakeBoldText(false);
+        textPaint.setColor(theme.hint);
+        canvas.drawText("/", x, base, textPaint);
+        x += wSlash * fit;
+
+        textPaint.setTextSize((english ? big : small) * fit);
+        textPaint.setFakeBoldText(english);
+        textPaint.setColor(english ? theme.keyFuncText : theme.hint);
+        canvas.drawText("英", x, base, textPaint);
+
+        textPaint.setTextAlign(Paint.Align.CENTER);
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         switch (event.getActionMasked()) {
@@ -476,9 +549,8 @@ public final class KeyboardView extends View {
                         ? pages[page].get(downRow).get(downCol) : null;
                 if (isSwipeUp(start, downRow, downCol,
                         event.getX(), event.getY())) {
-                    final char digit = start.hint.charAt(0);
                     clearPressed();
-                    fire(digitKeys[digit - '0']);
+                    fire(start.up);
                     return true;
                 }
                 if (pressedRow < 0) {
@@ -536,6 +608,13 @@ public final class KeyboardView extends View {
         if (key.kind == KIND_SYMBOLS || key.kind == KIND_LETTERS) {
             feedback();
             setPage(key.kind == KIND_SYMBOLS ? PAGE_SYMBOLS : PAGE_LETTERS);
+            return;
+        }
+        if (key.kind == KIND_LANGUAGE) {
+            feedback();
+            english = !english;
+            invalidate();
+            if (listener != null) listener.onLanguageChanged(english);
             return;
         }
         feedback();
