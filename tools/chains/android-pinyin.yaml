@@ -17,7 +17,7 @@ plugins:
   - { id: pime-shape-translate, role: translate, version: 1.0.0 }
   # Mixed view: Chinese candidates plus English completions for English-looking
   # input (`goo` -> good/Google). Must run after every Chinese source.
-  - { id: pime-english-translate, role: translate, version: 1.0.2,
+  - { id: pime-english-translate, role: translate, version: 1.0.3,
       settings: { max_candidates: 16 } }
   - { id: pime-emoji-suggest, role: predict, version: 1.0.0 }
   - { id: pime-clip-code, role: predict, version: 1.0.0 }

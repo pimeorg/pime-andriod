@@ -928,3 +928,32 @@ translate 插件就失败：按 `a` 时 logcat 是 `key 97: NOT_FOUND`，字段�
 - 有组合时点候选仍是数字选词（含翻页后第二页）；英文链与符号页数字选词不变。
 - 期间误触设置页开关导致 default 链少了 parse/rank 三项，已用 assets 的
   `default.cbor` 恢复，链回到 19 个插件。
+
+## 中文前缀 nih 混入异常英文（2026-11-16）
+
+用户反馈：中文输入 `nih`，候选栏出现 `big / air / ah` 等无关英文。
+
+### 根因
+
+- 中文链的 `pime-english-translate` 只在 `pinyin-parse/complete == false` 时
+  混入英文，但“不是完整拼音”也包括 `nih`（`ni` + 下一音节声母）、`zhongg`
+  这类正常途中输入。
+- 英文词表没有 `nih` 前缀，插件回退到拼写建议，按编辑距离给出 `big`/`air`，
+  并与原码一起排到中文候选前面。
+
+### 改动
+
+- `pime-english-translate 1.0.3`：中文链只做前缀补全，不再输出拼写建议；
+  英文侧没有真实新增时输出空数组并返回 `handled=false`。独立英文链的拼写建议
+  保留。
+- 同步插件包目录 `pime-plugin-pime-english-translate-1.0.3`（旧 1.0.2 删除），
+  `tools/chains/android-pinyin.yaml` / `android-english.yaml` 版本改为 1.0.3，
+  重出 `default.cbor` / `english.cbor`。
+
+### 验证
+
+- 插件侧 283 条用例全过、`check_plugins` 与 conformance ok。
+- `assembleDebug` 通过（含 `checkBundledPluginAssets`）。
+- MuMu 12（Android 15 / x86_64）：`nih` → 你好 / 你会 / 年后 / 你还 / 您好，
+  无英文候选；`goo` 仍是 goo/good/goods/够/工；`nihao` → 你好；
+  英文链 `hel` → hel/help/held/helped/hell。
