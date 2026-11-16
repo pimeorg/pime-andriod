@@ -365,6 +365,14 @@ public final class KeyboardView extends View {
                 edge = theme.keyEdge;
                 label = theme.keyText;
                 break;
+            case KIND_LANGUAGE:
+                /* The globe icon carries the state instead of a 中/英 label:
+                 * accent while the English chain is active. */
+                onAccent = english;
+                face = pressed ? theme.keyFuncPressed : theme.keyFunc;
+                edge = theme.keyFuncEdge;
+                label = english ? theme.accent : theme.keyFuncText;
+                break;
             case KIND_SPACE:
                 /* A live voice turn paints the space key like the accent keys:
                  * it is the recording indicator, since the mic left the
@@ -408,10 +416,14 @@ public final class KeyboardView extends View {
                 drawEnter(canvas, cx, cy, label);
                 break;
             case KIND_LANGUAGE:
-                drawLanguage(canvas, cx, cy, keyRect);
+                drawGlobe(canvas, cx, cy, label);
+                break;
+            case KIND_SYMBOLS:
+            case KIND_LETTERS:
+                drawPageGlyph(canvas, cx, cy, label, key.kind);
                 break;
             case KIND_SPACE:
-                drawSpace(canvas, key, keyRect, label, onAccent);
+                drawSpace(canvas, keyRect, label);
                 break;
             default:
                 drawLabel(canvas, key, keyRect, label, onAccent);
@@ -420,35 +432,71 @@ public final class KeyboardView extends View {
     }
 
     /**
-     * The space key carries the voice entry, so it is drawn as a key with a
-     * glyph instead of extra words: idle it is the usual 空格 with a muted mic
-     * under it, and while a turn is open the key becomes the recording
-     * indicator — accent fill plus one large mic, no text at all.
+     * The space bar is a blank bar with a small muted mic: the glyph is the only
+     * mark on it, so the key says "press and hold to talk" without a single word
+     * (and a blank wide bar is the usual space bar any thumb recognises). While a
+     * turn is open the same mic grows and the key turns accent.
      */
-    private void drawSpace(Canvas canvas, Key key, RectF rect, int color,
-                           boolean onAccent) {
+    private void drawSpace(Canvas canvas, RectF rect, int color) {
         if (voiceLive) {
-            drawMic(canvas, rect.centerX(), rect.centerY() + dp(1), color,
+            drawMic(canvas, rect.centerX(), rect.centerY(), color,
                     Math.min(rect.height() * 0.19f, dp(13)));
             return;
         }
-        /* The same bottom band the swipe-up digits use: label above, glyph
-         * below, both following the key height so landscape rows still fit. */
         final float scaled = getResources().getDisplayMetrics().scaledDensity;
         final float hint = Math.min(11f * scaled, rect.height() * 0.22f);
-        final float band = hint * 1.1f + dp(4);
-        final float size = Math.min(22f * scaled, rect.height() * 0.42f);
-        textPaint.setTextSize(size);
-        textPaint.setColor(color);
-        textPaint.setFakeBoldText(onAccent);
-        final Paint.FontMetrics metrics = textPaint.getFontMetrics();
-        canvas.drawText(key.label, rect.centerX(),
-                rect.top + (rect.height() - band) / 2f
-                        - (metrics.ascent + metrics.descent) / 2f, textPaint);
-        final float mic = Math.min(hint * 0.55f, dp(6));
-        drawMic(canvas, rect.centerX(),
-                rect.bottom - dp(4) - hint * 0.5f + mic * 0.09f,
-                theme.hint, mic);
+        drawMic(canvas, rect.centerX(), rect.centerY(), theme.hint,
+                Math.min(hint * 0.55f, dp(6)));
+    }
+
+    /**
+     * The page-switch key: a hashtag opens the symbols page, an A goes back to
+     * the letters. Both are drawn as strokes like the other key glyphs.
+     */
+    private void drawPageGlyph(Canvas canvas, float cx, float cy, int color,
+                               int kind) {
+        glyphPaint.setColor(color);
+        glyphPaint.setStrokeWidth(dp(2.1f));
+        glyphPath.reset();
+        if (kind == KIND_SYMBOLS) {
+            final float s = dp(8);
+            glyphPath.moveTo(cx - s * 0.30f, cy - s);
+            glyphPath.lineTo(cx - s * 0.58f, cy + s);
+            glyphPath.moveTo(cx + s * 0.44f, cy - s);
+            glyphPath.lineTo(cx + s * 0.16f, cy + s);
+            glyphPath.moveTo(cx - s, cy - s * 0.32f);
+            glyphPath.lineTo(cx + s, cy - s * 0.32f);
+            glyphPath.moveTo(cx - s, cy + s * 0.34f);
+            glyphPath.lineTo(cx + s, cy + s * 0.34f);
+        } else {
+            final float s = dp(8.5f);
+            glyphPath.moveTo(cx - s * 0.80f, cy + s * 0.85f);
+            glyphPath.lineTo(cx, cy - s * 0.92f);
+            glyphPath.lineTo(cx + s * 0.80f, cy + s * 0.85f);
+            glyphPath.moveTo(cx - s * 0.40f, cy + s * 0.22f);
+            glyphPath.lineTo(cx + s * 0.40f, cy + s * 0.22f);
+        }
+        canvas.drawPath(glyphPath, glyphPaint);
+    }
+
+    /**
+     * The 中/英 key as a globe: circle, meridian and equator arcs. The active
+     * side is told by the colour (accent while the English chain is up) rather
+     * than by two glyphs of text.
+     */
+    private void drawGlobe(Canvas canvas, float cx, float cy, int color) {
+        final float r = dp(9);
+        glyphPaint.setColor(color);
+        glyphPaint.setStrokeWidth(dp(1.7f));
+        canvas.drawCircle(cx, cy, r, glyphPaint);
+        final RectF meridian = new RectF(cx - r * 0.44f, cy - r,
+                cx + r * 0.44f, cy + r);
+        canvas.drawOval(meridian, glyphPaint);
+        canvas.drawLine(cx - r, cy, cx + r, cy, glyphPaint);
+        canvas.drawLine(cx - r * 0.86f, cy - r * 0.5f,
+                cx + r * 0.86f, cy - r * 0.5f, glyphPaint);
+        canvas.drawLine(cx - r * 0.86f, cy + r * 0.5f,
+                cx + r * 0.86f, cy + r * 0.5f, glyphPaint);
     }
 
     /**
@@ -562,51 +610,6 @@ public final class KeyboardView extends View {
         glyphPath.moveTo(cx - s * 0.95f, cy + s * 0.55f);
         glyphPath.lineTo(cx - s * 0.3f, cy + s * 1.2f);
         canvas.drawPath(glyphPath, glyphPaint);
-    }
-
-    /**
-     * 中/英 with the active side larger and in the key text colour, the other
-     * muted. The whole label scales down to the key width so a narrow screen
-     * never clips it.
-     */
-    private void drawLanguage(Canvas canvas, float cx, float cy, RectF rect) {
-        final float scaled = getResources().getDisplayMetrics().scaledDensity;
-        final float big = Math.min(16f * scaled, rect.height() * 0.40f);
-        final float small = Math.min(12f * scaled, rect.height() * 0.32f);
-
-        textPaint.setFakeBoldText(false);
-        textPaint.setTextAlign(Paint.Align.LEFT);
-        textPaint.setTextSize(big);
-        final float wZh = textPaint.measureText("中");
-        textPaint.setTextSize(small);
-        final float wSlash = textPaint.measureText("/");
-        final float wEn = textPaint.measureText("英");
-        final float total = wZh + wSlash + wEn;
-        final float fit = Math.min(1f, (rect.width() - dp(8)) / total);
-
-        textPaint.setTextSize(big * fit);
-        final Paint.FontMetrics metrics = textPaint.getFontMetrics();
-        final float base = cy - (metrics.ascent + metrics.descent) / 2f;
-        float x = cx - total * fit / 2f;
-
-        textPaint.setTextSize((english ? small : big) * fit);
-        textPaint.setFakeBoldText(!english);
-        textPaint.setColor(english ? theme.hint : theme.keyFuncText);
-        canvas.drawText("中", x, base, textPaint);
-        x += wZh * fit;
-
-        textPaint.setTextSize(small * fit);
-        textPaint.setFakeBoldText(false);
-        textPaint.setColor(theme.hint);
-        canvas.drawText("/", x, base, textPaint);
-        x += wSlash * fit;
-
-        textPaint.setTextSize((english ? big : small) * fit);
-        textPaint.setFakeBoldText(english);
-        textPaint.setColor(english ? theme.keyFuncText : theme.hint);
-        canvas.drawText("英", x, base, textPaint);
-
-        textPaint.setTextAlign(Paint.Align.CENTER);
     }
 
     @Override
