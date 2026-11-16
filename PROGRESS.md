@@ -1010,3 +1010,52 @@ WeaveText 的离线 ASR 之前只有 WASM 占位插件，pime 也没有宿主音
   缓存归档删除；完成回调直接开录，`recognizer ready` → `listening` →
   采集线程运行，停止后 0 字提交。模型就绪后再点麦克风不再下载。
 - 注意：验证时临时禁用了 Sogou/百度输入法（它们会抢回默认），结束后恢复。
+
+## 语音人口改为长按空格（2026-11-16）
+
+麦克风按钮占着工具栏一格，但语音是"按住说话"的交互，按钮的"点一下开始、
+再点一下结束"并不贴合。现在语音只在空格键上：长按开麦，松手提交，工具栏
+回到四个宿主动作。
+
+### 宿主（pime-android）
+
+- `KeyboardView`：按下空格键按系统 `ViewConfiguration.getLongPressTimeout()`
+  起定时器；超时后回调 `onVoiceHold()`，宿主开麦返回 `true` 才进入"语音
+  按住"状态，否则这次长按退化成普通空格。`ACTION_UP` 回调
+  `onVoiceRelease(false)`（提交），`ACTION_CANCEL` / 视图被移除回调
+  `onVoiceRelease(true)`（丢弃）。长按期间 `ACTION_MOVE` 直接吞掉，
+  滑出键区也不会落到别的键上；`clearPressed` 与 `onDetachedFromWindow`
+  都会撤掉定时器。
+- 视觉：空格键空闲时副标签是「长按语音」（复用副标签的排版，字母键的上滑
+  数字不受影响）；按住期间整键填强调色、标签换成「松开结束」，副标签隐藏，
+  因为录音指示器原来挂在工具栏麦克风上。长按判定成功补一次
+  `LONG_PRESS` 触感，与普通按键的 `KEYBOARD_TAP` 区分。
+- `KeyboardView.Listener` 新增 `onVoiceHold()` / `onVoiceRelease(cancelled)`，
+  `isSwipeUp` 额外要求 `key.up != null`，避免将来给空格加副标签时把上滑
+  当成空输出。
+- `PimeImeService`：`toggleVoice()` 拆成 `onVoiceHold()`（密码框、缺
+  `RECORD_AUDIO`、缺插件、缺模型各自提示后返回 `false`）与
+  `onVoiceRelease()`；`startVoice()` 改为返回 `boolean`。缺模型时只发起
+  下载并提示，下载完成回调改为提示「模型已就绪，长按空格说话」——手指早就
+  离开屏幕了，不能替用户开麦。`ACTION_VOICE_READY`（授权后广播）同样只
+  提示，不再自动开录；`voiceActive` 仍留着，第二次长按会先关掉上一个没正常
+  结束的回合。
+- `ImeToolbar`：删掉 `TOOL_VOICE` 与 `setVoiceActive`，只剩页切换、粘贴、
+  设置、收起；`ic_mic.xml` 与 `ime_action_voice*` 字符串一并删除，新增
+  `space_voice_hint` / `space_voice_release` / `voice_ready` /
+  `voice_permission_granted`。
+
+### 验证（MuMu 12 / Android 15 / API 35 / x86_64）
+
+- `assembleDebug` 通过（只有 `performHapticFeedback` 既有的 deprecated 提示）。
+- 先把默认输入法切到 PIME（`ime set`；Sogou 会抢回默认，需重新设置），
+  打开设置页试验输入框拉起键盘，IME 窗口 frame 为 `[0,1115]-[1080,1920]`，
+  空格键中心约 `(436,1830)`。
+- `adb shell input swipe 436 1830 436 1830 1500`（同位长按 1.5 s）：
+  logcat 出 `speech-sherpa: recognizer ready` → `listening, session=1`，
+  松手后 `stopped, 0 chars`（MuMu 无宿主麦克风，采集到 0 电平属预期），
+  之后键盘立即回到中文代；`uiautomator dump` 里试验输入框文本仍为空，
+  说明长按没有多打一个空格。
+- 同一位置短按（`input tap`）：输入框内容变成 `' '`，短按仍是空格。
+- 未在物理设备上验证识别出的整句文本，但 `VOICE_STOP → commit` 这段
+  （插件 `stop` 补尾音并 `commit`）本次未改动，仍按上一节回放用例覆盖。

@@ -13,6 +13,7 @@ import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.SoundEffectConstants;
 import android.view.View;
+import android.view.ViewConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -86,6 +87,24 @@ public final class KeyboardView extends View {
          */
         default void onLanguageChanged(boolean english) {
         }
+
+        /**
+         * The space key was held long enough to talk, which is the only way
+         * into ASR. The host opens the microphone and returns true; false
+         * leaves the press a plain space (the host has already told the user
+         * why voice did not start).
+         */
+        default boolean onVoiceHold() {
+            return false;
+        }
+
+        /**
+         * The space key was released after {@link #onVoiceHold} returned true.
+         * {@code cancelled} asks the host to drop the utterance instead of
+         * committing it.
+         */
+        default void onVoiceRelease(boolean cancelled) {
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -109,6 +128,8 @@ public final class KeyboardView extends View {
     private final RectF edgeRect = new RectF();
     private final Handler repeatHandler = new Handler(Looper.getMainLooper());
     private Key repeatKey;
+    /** True from a successful voice hold until the finger leaves the space key. */
+    private boolean voiceLive;
     private float downX;
     private float downY;
     private int downRow = -1;
@@ -121,6 +142,25 @@ public final class KeyboardView extends View {
                 listener.onKey(repeatKey);
                 repeatHandler.postDelayed(this, 70);
             }
+        }
+    };
+
+    /**
+     * Push-to-talk: holding the space key opens the microphone, releasing it
+     * ends the turn. The timer is the system long-press timeout so the gesture
+     * matches what the platform already teaches (and honours accessibility
+     * settings), and a shorter tap still types a space.
+     */
+    private final Runnable voiceHoldRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (downRow < 0 || listener == null) return;
+            final Key key = pages[page].get(downRow).get(downCol);
+            if (key.kind != KIND_SPACE) return;
+            if (!listener.onVoiceHold()) return;
+            voiceLive = true;
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            invalidate();
         }
     };
 
@@ -325,6 +365,17 @@ public final class KeyboardView extends View {
                 edge = theme.keyEdge;
                 label = theme.keyText;
                 break;
+            case KIND_SPACE:
+                /* A live voice turn paints the space key like the accent keys:
+                 * it is the recording indicator, since the mic left the
+                 * toolbar. */
+                onAccent = voiceLive;
+                face = voiceLive
+                        ? (pressed ? theme.accentPressed : theme.accent)
+                        : (pressed ? theme.keyFuncPressed : theme.keyFunc);
+                edge = voiceLive ? 0 : theme.keyFuncEdge;
+                label = voiceLive ? theme.onAccent : theme.keyFuncText;
+                break;
             default:
                 onAccent = false;
                 face = pressed ? theme.keyFuncPressed : theme.keyFunc;
@@ -367,12 +418,20 @@ public final class KeyboardView extends View {
 
     private void drawLabel(Canvas canvas, Key key, RectF rect, int color,
                            boolean onAccent) {
+        final boolean space = key.kind == KIND_SPACE;
         String label = key.label;
         if (shift && key.isLetter()) label = label.toUpperCase();
+        if (space && voiceLive) {
+            label = getContext().getString(R.string.space_voice_release);
+        }
+        final String hint = key.hint != null ? key.hint
+                : space && !voiceLive
+                        ? getContext().getString(R.string.space_voice_hint)
+                        : null;
         final float scaled = getResources().getDisplayMetrics().scaledDensity;
         float size = (label.length() > 1 ? 15f : 22f) * scaled;
         float centerY = rect.centerY();
-        if (key.hint != null && key.kind == KIND_CHAR) {
+        if (hint != null && (key.kind == KIND_CHAR || space)) {
             /* Leave a band at the bottom for the digit and keep the letter
              * above it; both sizes follow the key height so landscape rows do
              * not collide. */
@@ -387,7 +446,7 @@ public final class KeyboardView extends View {
         final Paint.FontMetrics metrics = textPaint.getFontMetrics();
         canvas.drawText(label, rect.centerX(),
                 centerY - (metrics.ascent + metrics.descent) / 2f, textPaint);
-        if (key.hint != null) drawHint(canvas, key.hint, rect);
+        if (hint != null) drawHint(canvas, hint, rect);
     }
 
     /** The muted digit under a letter; a swipe up on that key types it. */
@@ -514,13 +573,20 @@ public final class KeyboardView extends View {
                 downX = event.getX();
                 downY = event.getY();
                 invalidate();
-                if (row(pressedRow).get(pressedCol).kind == KIND_BACKSPACE) {
-                    repeatKey = row(pressedRow).get(pressedCol);
+                final Key down = row(pressedRow).get(pressedCol);
+                if (down.kind == KIND_BACKSPACE) {
+                    repeatKey = down;
                     repeatHandler.postDelayed(repeatRunnable, 350);
+                } else if (down.kind == KIND_SPACE) {
+                    repeatHandler.postDelayed(voiceHoldRunnable,
+                            ViewConfiguration.getLongPressTimeout());
                 }
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
+                /* A live voice turn owns the gesture: sliding off the key must
+                 * not turn it into a stray key press. */
+                if (voiceLive) return true;
                 /* Keep the starting key lit while the finger is above it: a
                  * swipe up leaves the key bounds (the top row has no row above),
                  * and hit testing would drop the press before ACTION_UP. */
@@ -545,6 +611,12 @@ public final class KeyboardView extends View {
                 return true;
             }
             case MotionEvent.ACTION_UP: {
+                if (voiceLive) {
+                    voiceLive = false;
+                    clearPressed();
+                    if (listener != null) listener.onVoiceRelease(false);
+                    return true;
+                }
                 final Key start = downRow >= 0
                         ? pages[page].get(downRow).get(downCol) : null;
                 if (isSwipeUp(start, downRow, downCol,
@@ -566,6 +638,12 @@ public final class KeyboardView extends View {
                 return true;
             }
             case MotionEvent.ACTION_CANCEL:
+                if (voiceLive) {
+                    voiceLive = false;
+                    clearPressed();
+                    if (listener != null) listener.onVoiceRelease(true);
+                    return true;
+                }
                 clearPressed();
                 return true;
             default:
@@ -580,6 +658,7 @@ public final class KeyboardView extends View {
         downCol = -1;
         repeatKey = null;
         repeatHandler.removeCallbacks(repeatRunnable);
+        repeatHandler.removeCallbacks(voiceHoldRunnable);
         invalidate();
     }
 
@@ -588,7 +667,7 @@ public final class KeyboardView extends View {
      * a digit hint, so fast horizontal typing never turns a letter into a digit.
      */
     private boolean isSwipeUp(Key key, int row, int col, float x, float y) {
-        if (key == null || key.hint == null || bounds == null
+        if (key == null || key.up == null || key.hint == null || bounds == null
                 || row < 0 || row >= bounds.length
                 || col < 0 || col >= bounds[row].length) {
             return false;
@@ -650,6 +729,13 @@ public final class KeyboardView extends View {
     @Override
     protected void onDetachedFromWindow() {
         repeatHandler.removeCallbacks(repeatRunnable);
+        repeatHandler.removeCallbacks(voiceHoldRunnable);
+        /* The view can go away mid-hold (theme rebuild, editor switched). The
+         * turn cannot outlive the finger that opened it, so it is dropped. */
+        if (voiceLive) {
+            voiceLive = false;
+            if (listener != null) listener.onVoiceRelease(true);
+        }
         super.onDetachedFromWindow();
     }
 

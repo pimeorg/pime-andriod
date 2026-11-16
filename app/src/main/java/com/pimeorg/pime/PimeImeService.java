@@ -299,7 +299,10 @@ public final class PimeImeService extends InputMethodService
                     return;
                 }
                 if (ACTION_VOICE_READY.equals(intent.getAction())) {
-                    toggleVoice();
+                    /* The permission arrived after the hold ended: say how to
+                     * start now, rather than opening the microphone without
+                     * a finger on the key. */
+                    toast(R.string.voice_permission_granted);
                     return;
                 }
                 // A newly installed package has to be loaded before the chain
@@ -442,9 +445,6 @@ public final class PimeImeService extends InputMethodService
             case ImeToolbar.TOOL_HIDE:
                 requestHideSelf(0);
                 break;
-            case ImeToolbar.TOOL_VOICE:
-                toggleVoice();
-                break;
             default:
                 break;
         }
@@ -453,53 +453,70 @@ public final class PimeImeService extends InputMethodService
     /* ------------------------------------------------------------- voice */
 
     /**
-     * Mic tap: first starts listening, a second tap finalizes the utterance.
-     * Recognition runs in the bundled native plugin; the host only owns the
-     * permission, the AudioRecord and the generation switch.
+     * Space held: the only way into ASR. Recognition runs in the bundled
+     * native plugin; the host only owns the permission, the AudioRecord and
+     * the generation switch. Returns false when voice cannot start, so the
+     * release still types a plain space and the user is never left without
+     * the key they pressed.
      */
-    private void toggleVoice() {
-        if (!coreReady) return;
+    @Override
+    public boolean onVoiceHold() {
+        if (!coreReady) return false;
         if (voiceActive) {
+            /* A turn that outlived its release (touch cancelled without an
+             * event, view rebuilt): the next hold closes it. */
             stopVoice();
-            return;
+            return true;
         }
         if (secureField) {
             Toast.makeText(this, R.string.voice_unavailable_secure,
                     Toast.LENGTH_SHORT).show();
-            return;
+            return false;
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, R.string.voice_permission_needed,
+                    Toast.LENGTH_SHORT).show();
             final Intent intent = new Intent(this, VoicePermissionActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
-            return;
+            return false;
         }
         if (speechGeneration == 0) {
             Toast.makeText(this, R.string.voice_unavailable_plugin,
                     Toast.LENGTH_SHORT).show();
-            return;
+            return false;
         }
         if (!VoiceModels.isReady(this)) {
+            /* The download takes about a minute; the finger is long gone by
+             * then, so the turn is not opened behind the user's back. */
             Toast.makeText(this, R.string.voice_download_needed,
                     Toast.LENGTH_SHORT).show();
-            VoiceModels.ensure(this, this::startVoice,
+            VoiceModels.ensure(this, () -> toast(R.string.voice_ready),
                     () -> toast(R.string.voice_download_failed));
-            return;
+            return false;
         }
-        startVoice();
+        return startVoice();
     }
 
-    private void startVoice() {
-        if (voiceActive || !coreReady) return;
-        /* Reached from the download callback too: the keyboard may be gone by
-         * then, and opening the microphone without a visible field is wrong. */
-        if (!isInputViewShown()) return;
+    /** Space released: finalize and commit the utterance, or drop it. */
+    @Override
+    public void onVoiceRelease(boolean cancelled) {
+        if (!voiceActive) return;
+        if (cancelled) cancelVoice();
+        else stopVoice();
+    }
+
+    private boolean startVoice() {
+        if (voiceActive || !coreReady) return false;
+        /* The microphone only opens while the keyboard and the user's finger
+         * are both there. */
+        if (!isInputViewShown()) return false;
         if (activeGeneration != speechGeneration) {
             if (core.activateGeneration(speechGeneration) != 0) {
                 Toast.makeText(this, R.string.voice_unavailable_plugin,
                         Toast.LENGTH_SHORT).show();
-                return;
+                return false;
             }
             activeGeneration = speechGeneration;
         }
@@ -510,7 +527,7 @@ public final class PimeImeService extends InputMethodService
             Log.w(TAG, "voice start: " + text(status));
             toast(R.string.voice_unavailable_plugin);
             restoreLanguageGeneration();
-            return;
+            return false;
         }
         /* The debug replay hook feeds the plugin from a wav, so leaving the
          * microphone closed keeps the capture ring out of the picture. */
@@ -521,10 +538,10 @@ public final class PimeImeService extends InputMethodService
             core.pump();
             restoreLanguageGeneration();
             toast(R.string.voice_unavailable_mic);
-            return;
+            return false;
         }
         voiceActive = true;
-        if (toolbar != null) toolbar.setVoiceActive(true);
+        return true;
     }
 
     private void stopVoice() {
@@ -534,7 +551,6 @@ public final class PimeImeService extends InputMethodService
             core.pump();
         }
         voiceActive = false;
-        if (toolbar != null) toolbar.setVoiceActive(false);
         restoreLanguageGeneration();
     }
 
@@ -546,7 +562,6 @@ public final class PimeImeService extends InputMethodService
             core.pump();
         }
         voiceActive = false;
-        if (toolbar != null) toolbar.setVoiceActive(false);
         restoreLanguageGeneration();
     }
 
