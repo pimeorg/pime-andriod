@@ -38,6 +38,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
@@ -94,10 +95,20 @@ public final class PimeImeService extends InputMethodService
 
     private static final int TOP_BAR_HEIGHT_DP = 44;
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
-    /** Cells per row in the unfolded grid. */
+    /** Cells per row in the unfolded table. */
     private static final int CANDIDATE_GRID_COLUMNS = 5;
-    /** Chevron-only line that stays under the preedit while the grid is open. */
-    private static final int EXPAND_ROW_HEIGHT_DP = 28;
+    /** Chain pages the table collects; five pages of nine is five rows. */
+    private static final int GRID_MAX_PAGES = 5;
+    private static final int GRID_ROW_HEIGHT_DP = 46;
+    /** The table's bottom line: the delete key where the keys used to be. */
+    private static final int GRID_BAR_HEIGHT_DP = 52;
+    /**
+     * pime key codes the keymap plugin turns into page moves: `home` rewinds to
+     * the first page, which lets the table be collected in one sweep.
+     */
+    private static final int KEY_PAGE_UP = 33;
+    private static final int KEY_PAGE_DOWN = 34;
+    private static final int KEY_HOME = 36;
     /** Characters of editor context reported to the predictor. */
     private static final int SURROUNDING_BEFORE = 64;
     private static final int SURROUNDING_AFTER = 32;
@@ -119,13 +130,37 @@ public final class PimeImeService extends InputMethodService
     /** Strip plus its chevron cell; hides and shows as one row. */
     private LinearLayout candidateLine;
     private ImageButton expandButton;
-    /** Whole-page grid that the chevron unfolds over the editor. */
-    private LinearLayout candidatePanel;
-    private boolean candidatesExpanded;
     private TextView compositionView;
     private String composition = "";
-    /** Password fields never hand their text to the chain. */
-    private boolean secureField;
+    /**
+     * The table that takes over the key area while candidates are unfolded.
+     *
+     * <p>It replaces the keys instead of hanging above them: the input view has
+     * exactly the same height either way, so the editor never reflows and the
+     * whole key area goes to candidates — the reason WeChat's chevron is worth
+     * tapping at all.
+     */
+    private LinearLayout candidatePanel;
+    /** Rows of the table; the ScrollView above it does the scrolling. */
+    private LinearLayout gridBoard;
+    private ScrollView gridScroll;
+    private boolean candidatesExpanded;
+    /**
+     * Pages the table shows, {@code gridPages.get(0)} being the chain's first
+     * page. Collected with home + pagedown, so a candidate's offset in this
+     * list is also its <em>global</em> index — the number the chain's
+     * {@code candidate} event takes, which means picking row 23 needs no page
+     * bookkeeping at all.
+     */
+    private final List<List<String>> gridPages = new ArrayList<>();
+    /** One page as the chain emits it; the collector reads it, nothing draws it. */
+    private final List<String> collectedPage = new ArrayList<>();
+    /** True while the host walks the chain: emitted pages are collected, not drawn. */
+    private boolean collecting;
+    /** Page the strip showed when the table opened; restored when it folds. */
+    private int gridReturnPage;
+    /** Chain page the strip is on; mirrors the format plugin's own cursor. */
+    private int chainPage;
     /** Syllable bounds in the composition, in UTF-16 units; empty when unknown. */
     private int[] compositionStarts = new int[0];
     private int[] compositionEnds = new int[0];
@@ -150,9 +185,14 @@ public final class PimeImeService extends InputMethodService
     /** Generation with only the native speech plugin, used while listening. */
     private long speechGeneration;
     private boolean voiceActive;
+    /** Password fields never hand their text to the chain. */
+    private boolean secureField;
+    /** Passed through the table's delete key while it takes over the keys. */
+    private final KeyboardView.Key backspaceKey =
+            new KeyboardView.Key("\u232b", 8, 1.5f, KeyboardView.KIND_BACKSPACE);
+    private boolean voiceReplay;
     /** True while the capture thread should keep reading the microphone. */
     private volatile boolean voiceCapturing;
-    private boolean voiceReplay;
     private AudioRecord voiceRecord;
     private Thread voiceThread;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -387,7 +427,7 @@ public final class PimeImeService extends InputMethodService
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(COMPOSITION_ROW_HEIGHT_DP)));
 
         candidateScroll = new CandidateStrip(this, next -> {
-            if (!candidates.isEmpty()) pageCandidates(next ? 34 : 33);
+            if (!candidates.isEmpty()) pageCandidates(next);
         });
         candidateScroll.setHorizontalScrollBarEnabled(false);
         candidateScroll.setFillViewport(true);
@@ -423,16 +463,6 @@ public final class PimeImeService extends InputMethodService
                 dp(CANDIDATE_ROW_HEIGHT_DP), ViewGroup.LayoutParams.MATCH_PARENT));
         candidateRow.addView(candidateLine, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(CANDIDATE_ROW_HEIGHT_DP)));
-
-        /* The expanded page hangs under the strip and above the keys, so the
-         * keyboard itself never moves while candidates are being picked. */
-        candidatePanel = new LinearLayout(this);
-        candidatePanel.setOrientation(LinearLayout.VERTICAL);
-        candidatePanel.setBackgroundColor(palette.bar);
-        candidatePanel.setVisibility(View.GONE);
-        candidateRow.addView(candidatePanel, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
         candidateRow.setVisibility(View.GONE);
         root.addView(candidateRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -450,6 +480,14 @@ public final class PimeImeService extends InputMethodService
         root.addView(keyboard, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
         toolbar.setSymbolsActive(keyboard.isSymbolPage());
+
+        /* The table sits where the keys are, with their exact height: unfolding
+         * swaps one for the other, so the editor above keeps its size and the
+         * candidates get the whole key area. Nothing hangs over the editor and
+         * nothing has to be re-laid out. */
+        candidatePanel = buildCandidatePanel(palette);
+        root.addView(candidatePanel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
 
         root.setMinimumHeight(dp(TOP_BAR_HEIGHT_DP) + keyboardHeight);
         return root;
@@ -471,6 +509,52 @@ public final class PimeImeService extends InputMethodService
         rowDp = Math.max(landscape ? 34f : 42f, Math.min(rowDp, landscape ? 48f : 60f));
         final int total = Math.round(rowDp * 4 + ROW_CHROME_DP);
         return dp(total * Prefs.keyboardPercent(this) / 100);
+    }
+
+    /**
+     * The unfolded candidate table: scrolling rows of candidates, with the
+     * delete key kept on the bottom line where the keys used to be (so a wrong
+     * letter can be fixed without folding the table away first).
+     */
+    private LinearLayout buildCandidatePanel(KeyboardTheme palette) {
+        final LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(palette.board);
+        panel.setVisibility(View.GONE);
+
+        gridScroll = new ScrollView(this);
+        gridScroll.setFillViewport(true);
+        gridScroll.setVerticalScrollBarEnabled(false);
+        gridScroll.setClipToPadding(false);
+        gridBoard = new LinearLayout(this);
+        gridBoard.setOrientation(LinearLayout.VERTICAL);
+        gridScroll.addView(gridBoard, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        panel.addView(gridScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        final LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        /* One column of the grid: the delete key lands where the fifth
+         * candidate of the next row would be, as in WeChat's table. */
+        bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1,
+                CANDIDATE_GRID_COLUMNS - 1));
+        final TextView delete = new TextView(this);
+        delete.setText("\u232b");
+        delete.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        delete.setTextColor(palette.keyFuncText);
+        delete.setGravity(Gravity.CENTER);
+        delete.setContentDescription(getString(R.string.ime_action_delete));
+        final GradientDrawable deleteFill = new GradientDrawable();
+        deleteFill.setCornerRadius(dp(14));
+        deleteFill.setColor(palette.keyFunc);
+        delete.setBackground(ripple(deleteFill, palette));
+        delete.setOnClickListener(v -> gridDelete());
+        bar.addView(delete, new LinearLayout.LayoutParams(0, dp(GRID_ROW_HEIGHT_DP), 1f));
+        panel.addView(bar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_BAR_HEIGHT_DP)));
+        return panel;
     }
 
     /** Host actions from the toolbar; none of them touch the plugin chain. */
@@ -814,6 +898,15 @@ public final class PimeImeService extends InputMethodService
         renderComposition();
         updateCandidateRow();
         if (!candidates.isEmpty()) onCandidates(candidates.toArray(new String[0]));
+        /* A rebuild always starts from the folded state; when the table was
+         * open it comes back with its collected pages, so re-unfold it instead
+         * of leaving keyboard and panel disagreeing about the rectangle. */
+        if (candidatesExpanded && composition.isEmpty()) candidatesExpanded = false;
+        if (candidatesExpanded) {
+            keyboard.setVisibility(View.GONE);
+            renderGrid();
+        }
+        updateCandidateRow();
     }
 
     @Override
@@ -1081,23 +1174,53 @@ public final class PimeImeService extends InputMethodService
         core.pump();
     }
 
-    private void pageCandidates(int keyCode) {
-        if (!coreReady || !core.hasSession()) return;
+    /**
+     * Sends a page move and captures the page the chain replies with.
+     *
+     * <p>The chain keeps its own page cursor; the host only mirrors it in
+     * {@link #chainPage} so the strip can be put back where it was. `home`
+     * rewinds to the first page, which is what makes the table collectable in
+     * one sweep.
+     */
+    private boolean sendPageKey(int keyCode) {
+        if (!coreReady || !core.hasSession()) return false;
+        collectedPage.clear();
         final int status = core.key(keyCode, 0, PimeCore.KEY_DOWN, null);
         core.pump();
         if (status < 0) {
             Log.w(TAG, "page " + keyCode + ": " + core.statusString(-status));
-            return;
+            return false;
         }
-        /* The new page arrived through onCandidates, which rebuilds the grid
-         * when it is open. */
+        if (keyCode == KEY_HOME) chainPage = 0;
+        else if (keyCode == KEY_PAGE_DOWN) ++chainPage;
+        else if (keyCode == KEY_PAGE_UP) chainPage = Math.max(0, chainPage - 1);
+        return true;
+    }
+
+    /** Swipe on the folded strip: move one page and let the callback redraw. */
+    private void pageCandidates(boolean forward) {
+        if (!coreReady || !core.hasSession()) return;
+        if (!sendPageKey(forward ? KEY_PAGE_DOWN : KEY_PAGE_UP)) return;
+        /* While the table is open it owns the list; the strip catches up when
+         * it folds. */
+        if (candidatesExpanded || collecting || collectedPage.isEmpty()) return;
+        candidates.clear();
+        candidates.addAll(collectedPage);
+        renderStrip();
+        updateCandidateRow();
     }
 
     /* PimeCore.Listener */
 
     @Override
     public void onComposition(String text, int cursor, int[] starts, int[] ends) {
-        composition = text == null ? "" : text;
+        final String next = text == null ? "" : text;
+        if (!next.equals(composition)) {
+            /* A new composition restarts the format plugin's paging. */
+            chainPage = 0;
+            gridReturnPage = 0;
+        }
+        composition = next;
         compositionStarts = starts == null ? new int[0] : starts;
         compositionEnds = ends == null ? new int[0] : ends;
         renderComposition();
@@ -1135,7 +1258,7 @@ public final class PimeImeService extends InputMethodService
             if (start < 0 || end < start || end > composition.length()) {
                 return composition;
             }
-            if (i > 0) out.append(space ? ' ' : '\'');
+            if (i > 0) out.append(space ? ' ' : (char) 39);
             out.append(composition, start, end);
         }
         return out.toString();
@@ -1154,36 +1277,48 @@ public final class PimeImeService extends InputMethodService
     @Override
     public void onCandidates(String[] items) {
         if (candidateBar == null) return;
+        /* A page the host walked to while filling the table is read by the
+         * collector; drawing it would flash the strip under the table. */
+        if (collecting) {
+            collectedPage.clear();
+            collectedPage.addAll(Arrays.asList(items));
+            return;
+        }
         candidates.clear();
         candidates.addAll(Arrays.asList(items));
-        candidateBar.removeAllViews();
         if (items.length == 0) {
             hideCandidates();
             return;
         }
+        if (candidatesExpanded) {
+            /* The table owns the visible list while it is open. */
+            return;
+        }
+        renderStrip();
+        updateCandidateRow();
+    }
+
+    /** Draws the folded strip from {@link #candidates}. */
+    private void renderStrip() {
+        if (candidateBar == null) return;
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
+        candidateBar.removeAllViews();
         final int limit = Prefs.candidates(this);
-        final int count = limit > 0 ? Math.min(limit, items.length) : items.length;
+        final int count = limit > 0
+                ? Math.min(limit, candidates.size()) : candidates.size();
         for (int i = 0; i < count; ++i) {
-            candidateBar.addView(candidateItem(items[i], i, palette));
+            candidateBar.addView(candidateItem(candidates.get(i), i, palette));
         }
         /* Every new page starts at its first candidate. */
         candidateScroll.scrollTo(0, 0);
-        /* The grid replaces the strip while it is open: same page, one row of
-         * it already unfolded, so showing both would read as duplicates. */
-        candidateScroll.setVisibility(candidatesExpanded ? View.GONE : View.VISIBLE);
-        expandButton.setVisibility(View.VISIBLE);
-        updateExpandButton();
-        /* Paging under an open grid keeps the grid, with the new page in it. */
-        if (candidatesExpanded) showCandidatePanel();
-        updateCandidateRow();
     }
 
     /**
      * The stack under the toolbar carries the preedit line above the candidate
      * strip, either alone, or nothing; it only takes height when it has
-     * something to say.
+     * something to say. The table and the keys are mutually exclusive views of
+     * the same rectangle, so nothing here changes the input view's height.
      */
     private void updateCandidateRow() {
         if (candidateRow == null) return;
@@ -1191,93 +1326,136 @@ public final class PimeImeService extends InputMethodService
         if (compositionView != null) {
             compositionView.setVisibility(composing ? View.VISIBLE : View.GONE);
         }
-        /* An empty page has nothing to unfold: the chevron goes with it. */
         final boolean hasCandidates = !candidates.isEmpty();
+        /* Only a composition has a list worth unfolding: association
+         * candidates come from predict plugins after the format plugin, so they
+         * have no chain indices to pick by. */
+        final boolean expandable = hasCandidates && composing;
+        final boolean unfolded = expandable && candidatesExpanded;
         if (expandButton != null) {
-            expandButton.setVisibility(hasCandidates ? View.VISIBLE : View.GONE);
+            expandButton.setVisibility(expandable ? View.VISIBLE : View.GONE);
         }
-        if (candidateLine != null) {
-            /* Folded the chevron rides the candidate row; unfolded the row is
-             * only the chevron, so it keeps a slim line of its own. */
-            final ViewGroup.LayoutParams params = candidateLine.getLayoutParams();
-            if (params != null) {
-                final int wanted = dp(candidatesExpanded
-                        ? EXPAND_ROW_HEIGHT_DP : CANDIDATE_ROW_HEIGHT_DP);
-                if (params.height != wanted) {
-                    params.height = wanted;
-                    candidateLine.setLayoutParams(params);
-                }
-            }
+        if (candidateScroll != null) {
+            candidateScroll.setVisibility(
+                    hasCandidates && !unfolded ? View.VISIBLE : View.GONE);
         }
         if (candidatePanel != null) {
-            candidatePanel.setVisibility(
-                    hasCandidates && candidatesExpanded ? View.VISIBLE : View.GONE);
+            candidatePanel.setVisibility(unfolded ? View.VISIBLE : View.GONE);
+        }
+        if (keyboard != null) {
+            keyboard.setVisibility(unfolded ? View.GONE : View.VISIBLE);
         }
         candidateRow.setVisibility(composing || hasCandidates
                 ? View.VISIBLE : View.GONE);
     }
 
     /**
-     * Same gesture as WeChat's candidate bar: the chevron turns the single
-     * scrolling row into the whole page at once, folded out over the editor so
-     * the keys stay exactly where they are. Tapping it again folds it back.
+     * The whole point of WeChat's chevron: hand the key area to the candidates.
+     * The keys are swapped out for a table of every candidate the chain has, so
+     * one screen shows several pages at once and no sideways paging is needed.
      */
     private void toggleCandidatePanel() {
         if (candidates.isEmpty()) return;
         candidatesExpanded = !candidatesExpanded;
         if (candidatesExpanded) {
-            showCandidatePanel();
-            candidateScroll.setVisibility(View.GONE);
+            gridReturnPage = chainPage;
+            buildGrid();
         } else {
-            if (candidatePanel != null) candidatePanel.removeAllViews();
-            candidateScroll.setVisibility(View.VISIBLE);
+            foldGrid();
         }
         updateExpandButton();
         updateCandidateRow();
     }
 
-    /** The chevron points down while folded and up while the page is open. */
-    private void updateExpandButton() {
-        if (expandButton == null) return;
-        final KeyboardTheme palette = inputPalette != null
-                ? inputPalette : KeyboardTheme.of(this);
-        expandButton.setRotation(candidatesExpanded ? 180f : 0f);
-        expandButton.setImageTintList(ColorStateList.valueOf(
-                candidatesExpanded ? palette.accent : palette.hint));
-        expandButton.setContentDescription(getString(candidatesExpanded
-                ? R.string.ime_action_collapse : R.string.ime_action_expand));
+    /**
+     * Collects the chain's pages into the table.
+     *
+     * <p>The chain hands out one page at a time, so the table walks it: `home`
+     * rewinds to the first page (which becomes the first row) and `pagedown`
+     * collects from there until the chain stops moving or the table is full.
+     * Because the walk starts at the first page, a candidate's offset in the
+     * collected list <em>is</em> its global index, which is exactly what the
+     * chain's `candidate` event takes — so picking a row never has to page the
+     * chain again, and there is no per-page slot arithmetic to get wrong.
+     */
+    private void buildGrid() {
+        gridPages.clear();
+        if (!coreReady || !core.hasSession()) {
+            renderGrid();
+            return;
+        }
+        collecting = true;
+        try {
+            if (sendPageKey(KEY_HOME) && !collectedPage.isEmpty()) {
+                gridPages.add(new ArrayList<>(collectedPage));
+                int guard = 0;
+                while (gridPages.size() < GRID_MAX_PAGES && guard++ <= GRID_MAX_PAGES) {
+                    if (!sendPageKey(KEY_PAGE_DOWN)) break;
+                    if (collectedPage.isEmpty()) break;
+                    final List<String> last = gridPages.get(gridPages.size() - 1);
+                    /* The format plugin clamps at its last page and re-sends
+                     * it, which is how "there is nothing further" looks. */
+                    if (collectedPage.equals(last)) break;
+                    gridPages.add(new ArrayList<>(collectedPage));
+                }
+            }
+            chainPage = Math.max(0, gridPages.size() - 1);
+            restoreStripPage();
+        } finally {
+            collecting = false;
+        }
+        renderGrid();
     }
 
-    /** Rebuilds the unfolded grid from the page the strip is showing. */
-    private void showCandidatePanel() {
-        if (candidatePanel == null) return;
+    /**
+     * Walks the chain back to the page the strip was showing, and keeps
+     * {@link #candidates} in step so folding shows that page again.
+     */
+    private void restoreStripPage() {
+        if (gridPages.isEmpty()) return;
+        final int target = Math.min(Math.max(gridReturnPage, 0), gridPages.size() - 1);
+        int guard = 0;
+        while (chainPage > target && guard++ <= GRID_MAX_PAGES + 1) {
+            if (!sendPageKey(KEY_PAGE_UP)) break;
+        }
+        while (chainPage < target && guard++ <= GRID_MAX_PAGES * 2 + 2) {
+            if (!sendPageKey(KEY_PAGE_DOWN)) break;
+        }
+        candidates.clear();
+        candidates.addAll(gridPages.get(target));
+    }
+
+    /** Lays the collected pages out five to a row, in chain order. */
+    private void renderGrid() {
+        if (gridBoard == null) return;
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
-        candidatePanel.removeAllViews();
-        final int count = candidates.size();
+        gridBoard.removeAllViews();
+        final List<String> flat = new ArrayList<>();
+        for (List<String> page : gridPages) flat.addAll(page);
         final int columns = CANDIDATE_GRID_COLUMNS;
-        for (int start = 0; start < count; start += columns) {
-            final LinearLayout line = new LinearLayout(this);
-            line.setOrientation(LinearLayout.HORIZONTAL);
-            line.setGravity(Gravity.CENTER_VERTICAL);
+        for (int start = 0; start < flat.size(); start += columns) {
+            final LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
             for (int column = 0; column < columns; ++column) {
                 final int index = start + column;
-                final View cell = index < count
-                        ? candidateGridItem(candidates.get(index), index, palette)
-                        : new View(this);
-                line.addView(cell, new LinearLayout.LayoutParams(
-                        0, dp(CANDIDATE_ROW_HEIGHT_DP), 1f));
+                final View cell = index < flat.size()
+                        ? gridCell(flat.get(index), index, palette) : new View(this);
+                row.addView(cell, new LinearLayout.LayoutParams(
+                        0, dp(GRID_ROW_HEIGHT_DP), 1f));
             }
-            candidatePanel.addView(line, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(CANDIDATE_ROW_HEIGHT_DP)));
+            gridBoard.addView(row, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_ROW_HEIGHT_DP)));
         }
+        if (gridScroll != null) gridScroll.scrollTo(0, 0);
     }
 
-    /** Grid cell: same emphasis as the strip's first item, evenly spread. */
-    private View candidateGridItem(String text, int index, KeyboardTheme palette) {
+    /** Table cell: same emphasis as the strip's first item, evenly spread. */
+    private View gridCell(String text, int index, KeyboardTheme palette) {
         final TextView item = new TextView(this);
-        item.setText(text);
         final boolean first = index == 0;
+        item.setText(text);
         item.setTextSize(TypedValue.COMPLEX_UNIT_SP, first ? 19 : 18);
         item.setTextColor(first ? palette.accent : palette.candidateText);
         item.setTypeface(Typeface.create("sans-serif",
@@ -1290,18 +1468,69 @@ public final class PimeImeService extends InputMethodService
         pill.setCornerRadius(dp(16));
         pill.setColor(first ? palette.accentSoft : 0);
         item.setBackground(ripple(pill, palette));
-        item.setOnClickListener(v -> selectCandidate(index));
+        item.setOnClickListener(v -> selectGridCandidate(index));
         return item;
+    }
+
+    /**
+     * Picks a row of the table by its global index.
+     *
+     * <p>The format plugin resolves `candidate` over the whole list
+     * (`commit = index < total`), so row 23 of a five-page table commits
+     * straight away: no paging, no digit, and no way to land on the wrong word
+     * because a page count drifted.
+     */
+    private void selectGridCandidate(int index) {
+        if (!coreReady || !core.hasSession()) return;
+        if (composition.isEmpty()) return;
+        commitSeen = false;
+        final int status = core.selectCandidate(index);
+        core.pump();
+        if (status < 0) {
+            Log.w(TAG, "candidate " + index + ": " + core.statusString(-status));
+        }
+        resetAfterCommit();
+    }
+
+    /** The table's delete key: fix a letter without folding the table away. */
+    private void gridDelete() {
+        onKey(backspaceKey);
+        if (!candidatesExpanded) return;
+        if (composition.isEmpty()) {
+            /* Nothing left to unfold: fall back to the keys. */
+            toggleCandidatePanel();
+            return;
+        }
+        buildGrid();
+    }
+
+    /** Folds the table back into the strip, on the page it was showing. */
+    private void foldGrid() {
+        if (gridBoard != null) gridBoard.removeAllViews();
+        gridPages.clear();
+        renderStrip();
+    }
+
+    /** The chevron points down while folded and up while the table is open. */
+    private void updateExpandButton() {
+        if (expandButton == null) return;
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        expandButton.setRotation(candidatesExpanded ? 180f : 0f);
+        expandButton.setImageTintList(ColorStateList.valueOf(
+                candidatesExpanded ? palette.accent : palette.hint));
+        expandButton.setContentDescription(getString(candidatesExpanded
+                ? R.string.ime_action_collapse : R.string.ime_action_expand));
     }
 
     private void hideCandidates() {
         candidates.clear();
         candidatesExpanded = false;
+        chainPage = 0;
+        gridReturnPage = 0;
+        gridPages.clear();
         if (candidateBar != null) candidateBar.removeAllViews();
-        if (candidatePanel != null) {
-            candidatePanel.removeAllViews();
-            candidatePanel.setVisibility(View.GONE);
-        }
+        if (gridBoard != null) gridBoard.removeAllViews();
         if (candidateScroll != null) candidateScroll.setVisibility(View.GONE);
         if (expandButton != null) expandButton.setVisibility(View.GONE);
         updateExpandButton();
