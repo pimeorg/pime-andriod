@@ -106,6 +106,8 @@
     <string name="ime_action_symbols">符号键盘</string>
     <string name="ime_action_letters">字母键盘</string>
     <string name="ime_action_paste">粘贴</string>
+    <string name="ime_action_expand">展开候选</string>
+    <string name="ime_action_collapse">收起候选</string>
     <string name="voice_unavailable_secure">密码输入框不能用语音</string>
     <string name="voice_unavailable_plugin">语音插件不可用</string>
     <string name="voice_unavailable_mic">麦克风打不开</string>
