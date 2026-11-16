@@ -7,10 +7,10 @@ plugins:
   - { id: pime-keymap-default, role: preprocess, version: 1.2.0 }
   - { id: pime-pinyin-parse, role: parse, version: 1.1.4 }
   - { id: pime-shape-parse, role: parse, version: 1.0.0 }
-  - { id: pime-pinyin-translate, role: translate, version: 1.2.2,
-      settings: { max_candidates: 8 } }
-  - { id: pime-pinyin-rank, role: rank, version: 1.2.1,
-      settings: { page_size: 5 } }
+  - { id: pime-pinyin-translate, role: translate, version: 1.4.0,
+      settings: { max_candidates: 640 } }
+  - { id: pime-pinyin-rank, role: rank, version: 1.4.0,
+      settings: { max_candidates: 640, page_size: 640 } }
   - { id: pime-special-candidates, role: translate, version: 1.0.0 }
   - { id: pime-shortcuts, role: translate, version: 1.0.0 }
   - { id: pime-hans-hant, role: translate, version: 1.0.0 }
@@ -21,8 +21,8 @@ plugins:
       settings: { max_candidates: 16 } }
   - { id: pime-emoji-suggest, role: predict, version: 1.0.0 }
   - { id: pime-clip-code, role: predict, version: 1.0.0 }
-  - { id: pime-candidates-format, role: format, version: 1.3.3,
-      settings: { page_size: 9 } }
+  - { id: pime-candidates-format, role: format, version: 1.5.0,
+      settings: { page_size: 640 } }
   - { id: pime-learn-user-dict, role: learn, version: 1.0.0 }
   - { id: pime-predict-context, role: predict, version: 1.1.0 }
   - { id: pime-app-mode, role: learn, version: 1.0.0 }

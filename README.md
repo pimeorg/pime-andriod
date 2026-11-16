@@ -138,7 +138,7 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
 - 顶栏工具栏只做宿主动作：页切换、粘贴剪贴板纯文本、打开设置、收起键盘；
   粘贴在组合中会先结束组合并清掉候选，避免 `commitText` 顶掉正在输入的内容。
 - 候选行的 `⌃` 展开候选面板：面板与键盘同高、互斥显示，IME 总高度不变，
-  编辑器不重排。面板把整条候选（最多 5 页）摊成 5 列网格，选词按全局序号
+  编辑器不重排。面板把整条候选（最多 640 个）摊成 5 列网格，选词按全局序号
   `pime_core_candidate(index)` 提交。面板顶部分三类：词频（链的原顺序）、
   单字（只留单字候选）、手写找字；词频/单字左侧有音节栏，按候选首字拼音
   分组，另有「首笔画」二级筛选（横 / 竖 / 撇 / 点 / 折）。手写找字的内置
@@ -183,7 +183,7 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
   candidates-format 提交词本身，不加空格。
 - 主题或键盘高度变化时设置页广播 `ACTION_DISPLAY_CHANGED`，运行中的输入服务
   重建输入视图并保留组合串与候选。
-- `onStartInput` 设置上下文（app_id、field_type、locale=zh_CN、page_size=20、
+- `onStartInput` 设置上下文（app_id、field_type、locale=zh_CN、page_size=640、
   `CANDIDATES|TOUCH|SECURE`），密码框同时置 secure。
 - `onFinishInput` 复位并取消焦点；会话在 `onDestroy` 释放。
 
@@ -194,6 +194,11 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
 - 随包内置 20 个第一方插件包（19 个 WASM + 1 个原生 `pime-speech-sherpa`）
   与两条链：`default.cbor`（中文，可在设置页增删改）与
   `english.cbor`（英文，保留名称，不出现在链列表里）。
+- 随包拼音词表 181,656 条（约 4.1 MB，4 万单字读音 + 15 万词语），由
+  rime-wanxiang 生成（CC BY 4.0，见 pime-public-plugin 的
+  `data/pinyin/SOURCES.md`）。词表超过 core 单次资产读取的 4 MB 上限，插件按
+  1 MB 分块加载。单音节输入（`s`/`sh`）会产出数百条候选，模拟器上“全部”的
+  最坏按键延迟约 0.6 s；常用拼音通常 0.2 s 左右，尚未在 arm64 实机测过。
 - 语音模型不随 APK 分发：首次使用需联网下载（约 25 MB，可走镜像）；APK 因
   附带 sherpa-onnx/onnxruntime 运行时有约 33 MB。
 - MuMu 12 没有宿主麦克风输入，模拟器上只能验证采集线程与识别器加载；

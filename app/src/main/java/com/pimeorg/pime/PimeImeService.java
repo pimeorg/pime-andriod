@@ -98,8 +98,20 @@ public final class PimeImeService extends InputMethodService
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
     /** Cells per row in the unfolded table. */
     private static final int CANDIDATE_GRID_COLUMNS = 5;
-    /** Chain pages the table collects; five pages of nine is five rows. */
-    private static final int GRID_MAX_PAGES = 5;
+    /**
+     * Most candidates one chain call may hand back. This is the chain's page
+     * size, not a display preference: "候选数量 = 全部" means the whole list,
+     * so the host asks for everything the plugins can produce and only slices
+     * it locally for the 3/5/7/9 choices.
+     */
+    private static final int CANDIDATE_PAGE_SIZE = 640;
+    /**
+     * Loop bound while collecting pages / restoring the strip. The real stop
+     * condition is "the chain stopped moving or repeated a page"; this only
+     * keeps a misbehaving chain from spinning forever. It is not a candidate
+     * limit.
+     */
+    private static final int GRID_PAGE_GUARD = 1000;
     private static final int GRID_ROW_HEIGHT_DP = 46;
     /** The table's bottom line: the delete key where the keys used to be. */
     private static final int GRID_BAR_HEIGHT_DP = 52;
@@ -197,6 +209,14 @@ public final class PimeImeService extends InputMethodService
     private int[] compositionStarts = new int[0];
     private int[] compositionEnds = new int[0];
     private final List<String> candidates = new ArrayList<>();
+    /**
+     * First candidate the folded strip draws when the preference caps it at
+     * 3/5/7/9. The chain hands over its whole list in one page, so paging the
+     * strip is a local window move; "全部" keeps this at zero.
+     */
+    private int stripOffset;
+    /** Strip item views are reused: a whole-dictionary list is not a view list. */
+    private final List<TextView> stripViews = new ArrayList<>();
     /**
      * Set by {@link #onCommit} while a chain key runs. A digit that picks a
      * candidate commits without the parsers' commit phase, so the host has to
@@ -1150,7 +1170,8 @@ public final class PimeImeService extends InputMethodService
                 | PimeCore.HOST_SECURE | PimeCore.HOST_SURROUNDING
                 | PimeCore.HOST_AUDIO_CAPTURE;
         report(core.context(app, fieldType(attribute.inputType),
-                PimeCore.INPUT_KEYBOARD, "zh_CN", 20, hostCaps), "context");
+                PimeCore.INPUT_KEYBOARD, "zh_CN", CANDIDATE_PAGE_SIZE, hostCaps),
+                "context");
         report(core.secure(password), "secure");
         report(core.focus(true), "focus");
     }
@@ -1188,6 +1209,16 @@ public final class PimeImeService extends InputMethodService
                 || key.kind == KeyboardView.KIND_SPACE
                 ? String.valueOf(textFor(key, shifted)) : null;
         final boolean english = keyboard != null && keyboard.isEnglish();
+
+        /* With a display window (3/5/7/9), space picks the first candidate of
+         * that window instead of the hidden head of the chain's single page. */
+        if (!english && coreReady && core.hasSession()
+                && key.kind == KeyboardView.KIND_SPACE
+                && stripOffset > 0 && !composition.isEmpty()
+                && !candidates.isEmpty()) {
+            selectCandidate(stripOffset);
+            return;
+        }
 
         /* English shares the chain path. The bundled English chain is only
          * skipped when it is not installed, so without it English still types
@@ -1321,22 +1352,16 @@ public final class PimeImeService extends InputMethodService
      */
     private void selectCandidate(int index) {
         if (!coreReady || !core.hasSession()) return;
+        if (index < 0 || index >= candidates.size()) return;
         if (composition.isEmpty()) {
             commitPrediction(index);
             return;
         }
-        /* The format plugin pages by at most nine (its page_size setting caps
-         * there), so every slot on the shown page has a digit. Anything else
-         * has no way through the chain: commit nothing rather than the wrong
-         * candidate. */
-        if (index >= 9) {
-            Log.w(TAG, "candidate " + index + ": no digit for this slot");
-            return;
-        }
-        final char digit = (char) ('1' + index);
+        /* The `candidate` event addresses the whole list, not a digit slot on
+         * a nine-wide page: "全部" can show hundreds, and one tap still has to
+         * commit exactly the word under the finger. */
         commitSeen = false;
-        final int status = core.key(digit, 0, PimeCore.KEY_DOWN,
-                String.valueOf(digit));
+        final int status = core.selectCandidate(index);
         core.pump();
         if (status < 0) Log.w(TAG, "candidate " + index + ": " + text(-status));
         resetAfterCommit();
@@ -1402,15 +1427,21 @@ public final class PimeImeService extends InputMethodService
         return true;
     }
 
-    /** Swipe on the folded strip: move one page and let the callback redraw. */
+    /**
+     * Swipe on the folded strip: move the local window one display page.
+     *
+     * <p>With "全部" the whole list is already on screen, so there is nothing
+     * to page; with 3/5/7/9 the chain's single page is sliced here. This also
+     * keeps the chain's own page cursor at zero, which is what the table's
+     * global indexes and space/digit selection rely on.
+     */
     private void pageCandidates(boolean forward) {
-        if (!coreReady || !core.hasSession()) return;
-        if (!sendPageKey(forward ? KEY_PAGE_DOWN : KEY_PAGE_UP)) return;
-        /* While the table is open it owns the list; the strip catches up when
-         * it folds. */
-        if (candidatesExpanded || collecting || collectedPage.isEmpty()) return;
-        candidates.clear();
-        candidates.addAll(collectedPage);
+        if (candidatesExpanded || collecting || candidates.isEmpty()) return;
+        final int limit = Prefs.candidates(this);
+        if (limit <= 0) return;
+        final int next = stripOffset + (forward ? limit : -limit);
+        if (next < 0 || next >= candidates.size()) return;
+        stripOffset = next;
         renderStrip();
         updateCandidateRow();
     }
@@ -1421,9 +1452,11 @@ public final class PimeImeService extends InputMethodService
     public void onComposition(String text, int cursor, int[] starts, int[] ends) {
         final String next = text == null ? "" : text;
         if (!next.equals(composition)) {
-            /* A new composition restarts the format plugin's paging. */
+            /* A new composition restarts the format plugin's paging and the
+             * strip's local window. */
             chainPage = 0;
             gridReturnPage = 0;
+            stripOffset = 0;
         }
         composition = next;
         compositionStarts = starts == null ? new int[0] : starts;
@@ -1491,6 +1524,10 @@ public final class PimeImeService extends InputMethodService
         }
         candidates.clear();
         candidates.addAll(Arrays.asList(items));
+        /* A new list is a new first page, whether it came from typing or from
+         * the chain's own paging. */
+        stripOffset = 0;
+        if (BuildConfig.DEBUG) Log.d(TAG, "candidates=" + items.length);
         if (items.length == 0) {
             hideCandidates();
             return;
@@ -1503,19 +1540,42 @@ public final class PimeImeService extends InputMethodService
         updateCandidateRow();
     }
 
-    /** Draws the folded strip from {@link #candidates}. */
+    /**
+     * Draws the folded strip from {@link #candidates}.
+     *
+     * <p>The chain now delivers its whole candidate list in one page, so the
+     * 3/5/7/9 preference is a window over that list rather than a request for
+     * fewer candidates. "全部" draws every one of them. Views are recycled
+     * because a dictionary reading can fill hundreds of slots ({@code shi}
+     * has 260, a bare {@code s} the full 640), and rebuilding that many
+     * TextViews on every key would be visible.
+     */
     private void renderStrip() {
         if (candidateBar == null) return;
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
-        candidateBar.removeAllViews();
+        final int size = candidates.size();
         final int limit = Prefs.candidates(this);
-        final int count = limit > 0
-                ? Math.min(limit, candidates.size()) : candidates.size();
-        for (int i = 0; i < count; ++i) {
-            candidateBar.addView(candidateItem(candidates.get(i), i, palette));
+        if (stripOffset < 0 || stripOffset >= size) stripOffset = 0;
+        final int start = limit > 0 ? stripOffset : 0;
+        final int end = Math.min(size, start + (limit > 0 ? limit : size));
+        int used = 0;
+        for (int i = start; i < end; ++i) {
+            TextView item;
+            if (used < stripViews.size()) {
+                item = stripViews.get(used);
+            } else {
+                item = candidateItem(palette);
+                stripViews.add(item);
+                candidateBar.addView(item);
+            }
+            bindCandidateItem(item, candidates.get(i), i, i == start, palette);
+            item.setVisibility(View.VISIBLE);
+            ++used;
         }
-        /* Every new page starts at its first candidate. */
+        for (int i = used; i < stripViews.size(); ++i) {
+            stripViews.get(i).setVisibility(View.GONE);
+        }
         candidateScroll.scrollTo(0, 0);
     }
 
@@ -1615,7 +1675,7 @@ public final class PimeImeService extends InputMethodService
             if (sendPageKey(KEY_HOME) && !collectedPage.isEmpty()) {
                 gridPages.add(new ArrayList<>(collectedPage));
                 int guard = 0;
-                while (gridPages.size() < GRID_MAX_PAGES && guard++ <= GRID_MAX_PAGES) {
+                while (guard++ < GRID_PAGE_GUARD) {
                     if (!sendPageKey(KEY_PAGE_DOWN)) break;
                     if (collectedPage.isEmpty()) break;
                     final List<String> last = gridPages.get(gridPages.size() - 1);
@@ -1655,14 +1715,15 @@ public final class PimeImeService extends InputMethodService
         if (gridPages.isEmpty()) return;
         final int target = Math.min(Math.max(gridReturnPage, 0), gridPages.size() - 1);
         int guard = 0;
-        while (chainPage > target && guard++ <= GRID_MAX_PAGES + 1) {
+        while (chainPage > target && guard++ < GRID_PAGE_GUARD) {
             if (!sendPageKey(KEY_PAGE_UP)) break;
         }
-        while (chainPage < target && guard++ <= GRID_MAX_PAGES * 2 + 2) {
+        while (chainPage < target && guard++ < GRID_PAGE_GUARD) {
             if (!sendPageKey(KEY_PAGE_DOWN)) break;
         }
         candidates.clear();
         candidates.addAll(gridPages.get(target));
+        stripOffset = 0;
     }
 
     /** One visible cell and the index that picks it. */
@@ -2017,13 +2078,17 @@ public final class PimeImeService extends InputMethodService
 
     private void hideCandidates() {
         candidates.clear();
+        stripOffset = 0;
         /* The handwriting surface is not tied to a candidate list: a chain
          * "hide" while it is up must not fold the tab away. */
         if (panelTab != TAB_HANDWRITING) candidatesExpanded = false;
         chainPage = 0;
         gridReturnPage = 0;
         gridPages.clear();
-        if (candidateBar != null) candidateBar.removeAllViews();
+        if (candidateBar != null) {
+            candidateBar.removeAllViews();
+            stripViews.clear();
+        }
         if (gridBoard != null) gridBoard.removeAllViews();
         if (candidateScroll != null) candidateScroll.setVisibility(View.GONE);
         if (expandButton != null) expandButton.setVisibility(View.GONE);
@@ -2031,32 +2096,38 @@ public final class PimeImeService extends InputMethodService
         updateCandidateRow();
     }
 
+    /** An empty strip item; {@link #bindCandidateItem} fills it each redraw. */
+    private TextView candidateItem(KeyboardTheme palette) {
+        final TextView item = new TextView(this);
+        item.setGravity(Gravity.CENTER);
+        item.setSingleLine(true);
+        item.setPadding(dp(16), 0, dp(16), 0);
+        item.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        return item;
+    }
+
     /**
-     * The chain's first candidate gets the accent pill; the rest are plain, so
+     * The first visible candidate gets the accent pill; the rest are plain, so
      * the eye lands on the one a tap on space would take.
      */
-    private TextView candidateItem(String text, int index, KeyboardTheme palette) {
-        final boolean first = index == 0;
-        final TextView item = new TextView(this);
+    private void bindCandidateItem(TextView item, String text, int index,
+                                   boolean first, KeyboardTheme palette) {
         item.setText(text);
         item.setTextSize(TypedValue.COMPLEX_UNIT_SP, first ? 20 : 19);
         item.setTextColor(first ? palette.accent : palette.candidateText);
         item.setTypeface(Typeface.create("sans-serif",
                 first ? Typeface.BOLD : Typeface.NORMAL));
-        item.setGravity(Gravity.CENTER);
-        item.setSingleLine(true);
-        item.setPadding(dp(16), 0, dp(16), 0);
         final GradientDrawable pill = new GradientDrawable();
         pill.setCornerRadius(dp(18));
         pill.setColor(first ? palette.accentSoft : 0);
         item.setBackground(ripple(pill, palette));
         item.setOnClickListener(v -> selectCandidate(index));
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.MATCH_PARENT);
+        final LinearLayout.LayoutParams params =
+                (LinearLayout.LayoutParams) item.getLayoutParams();
         params.setMargins(dp(4), dp(7), first ? dp(4) : 0, dp(7));
         item.setLayoutParams(params);
-        return item;
     }
 
     @Override

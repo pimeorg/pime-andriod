@@ -155,8 +155,10 @@ Components 的原生 View，保持 `SettingsActivity` 单文件、无状态层�
   显示（候选数量 全部/3/5/7/9、主题 跟随系统/浅色/深色）。前三项就地生效——
   键盘高度在 `onCreateInputView` 按百分比缩放并同步 `minimumHeight`，振动/按键音
   在 `KeyboardView.fire()` 里判断（按键音走 `AudioManager.playSoundEffect`）。
-- 候选数量在 `PimeImeService.onCandidates` 里截断显示条数，`selectCandidate` 仍用
-  原始下标，因此截断只影响可见候选，不影响插件链给出的候选序号。
+- 候选数量在 `PimeImeService.renderStrip` 里把候选切成一个本地窗口（`stripOffset`
+  + `Prefs.candidates`），`selectCandidate` 仍用插件链的全局下标，因此窗口只影响
+  可见范围，不影响候选序号。（后续改成「全部」不再限制、3/5/7/9 本地翻页，
+  见文末「候选不再封顶」。）
 - 单选对话框用 `MaterialAlertDialogBuilder.setSingleChoiceItems`；改完偏好后
   `rebuildDetail()` 重建当前二级页（`Page` 在构建时读偏好），所以行副标题立即
   反映新值。主题这类需要整页重建的项交给 `AppCompatDelegate.setDefaultNightMode`，
@@ -1410,7 +1412,170 @@ MuMu 12（`127.0.0.1:16384`）现在装的是 **release** 签名包，并已授�
   （微信另有手写键盘模式，本轮不做）。
 - 侧栏每次点选重建列表，滚动位置回到顶部；音节多时要滚到最底下才能按
   首笔画——后续可以把「首笔画」固定在侧栏底部。
-- 单字/整表都只收 5 页（45 个候选）；`shi` 这类大候选集里靠后的单字可能
-  不在表内。
+- 展开面板一次可收最多 200 个候选（链的 200 页上限，`GRID_PAGE_GUARD` 只防
+  死循环）；`shi` 这类大候选集里更靠后的候选仍可能不在表内。这一条随后被
+  “词库扩充与 640 上限”一节解决：上限提到 640，`shi` 的 260 条全部进表。
 - 横屏时手写画布偏矮（结果条固定 46dp 后剩余高度不多），后续可按方向
   调整结果条与画布比例。
+
+
+## 候选不再封顶：全部 = 不限制，3/5/7/9 = 本地翻页
+
+用户的要求很直接：“我不希望你在全部时还限制候选个数”。此前“候选数量=全部”
+只是把同一份 5 个候选原样显示，链里还有三层封顶：`pime-pinyin-translate`
+的 `max_candidates` 默认 8 / 上限 32 且束搜索只保留 16 条路径，
+`pime-pinyin-rank` 的 `max_candidates` 上限 32、`page_size` 上限 9，
+`pime-candidates-format` 的 `kMaxShown` 是 32 且 `pime_init` 把 `page_size`
+死锁在 `<= 9`。宿主又只把候选栏当一页，面板最多收 5 页（45 个）。
+
+### 插件链
+
+- `pime-pinyin-translate 1.2.2 → 1.3.0`：候选上限 32 → 200，默认 8 → 200。
+  束搜索宽度仍是 16（代价不变），另加一张**整串直配表** `g_direct`：凡是
+  `position == 0 && next == g_input_len` 的词条都按分数插进表里（按文本去重、
+  上限 200），`build_candidates` 在束路径之后追加，所以“全部”拿到的是词典里
+  所有整串匹配，而不只是 16 条最优路径。表放在全局区，栈上不再放大数组。
+- `pime-pinyin-rank 1.2.1 → 1.3.0`：上限 32 → 200，默认 16 → 200，
+  `page_size` 上限从 9 放开到 200。候选数组改 `static` 避免栈溢出。
+- `pime-candidates-format 1.3.3 → 1.4.0`：`kMaxShown` 32 → 200；关键修复是
+  `pime_init` 里 `page_size <= 9` 的硬编码，不改它，链里写 `page_size: 200`
+  也会被静默忽略，设备上永远回到默认 5 个。
+- 两条链同步：中文链 translate/rank `max_candidates: 200`、
+  rank `page_size: 200`、format `page_size: 200`；英文链 format 同样 200。
+  `tools/chains/*.yaml` 重新生成 `default.cbor` / `english.cbor`，旧插件包
+  从 `assets/plugins/` 删除，换成 1.3.0 / 1.3.0 / 1.4.0。
+
+### 宿主
+
+- `reportContext` 每次报 `page_size = 200`：链一次给全整表，翻页交给宿主。
+- `renderStrip` 不再 `subList` 后整排重建：按 `stripOffset` + `Prefs.candidates`
+  取窗口，候选 `TextView` 复用（`stripViews`），每次只 `bind` 可见项，
+  多余项 `GONE`。候选数量=全部（0）时窗口就是整表，横向滚动看完全部；
+  3/5/7/9 时窗口一次只放这么多。
+- `pageCandidates` 改为移动本地窗口（`offset ± limit`），不再向链发
+  `home`/`pagedown`。窗口内第一项保留强调色。
+- 窗口偏移大于 0 时按空格提交窗口首项（`selectCandidate(stripOffset)`），
+  与“翻页后空格选第一个”的直觉一致；偏移为 0 时仍是插件链的空格行为。
+- `selectCandidate` 只校验 `0 <= index < candidates.size()`，不再限制 9 或数字
+  键；面板网格本来就用全局下标，现在折叠条也能选到第 200 个。
+- 组合串变化、新候选列表、提交/隐藏候选时都重置 `stripOffset`。
+- 展开面板的收集循环用 `GRID_PAGE_GUARD = 1000` 防死循环，遇到空页/重复页
+  即停，不再有 `GRID_MAX_PAGES = 5`。
+
+### 验证
+
+- 插件原生测试 283/283 通过。
+- 原生模拟器：`page_size=200` 时 `shi` 输出 47 项。
+- MuMu 12（1080×1920）：`shi` → 链日志 `candidates=47`，折叠条横向可滚到
+  最后一项；面板 5 列 × 9 + 2 行共 47 个，点全局第 45 项「似」提交正确。
+- 候选数量=3：`shi` 日志 `strip size=47 pref=3 offset=0 range=0..3`，横滑后
+  `3..6`、`6..9`，此时按空格提交窗口首项「市」。
+- 候选数量=全部（`Prefs.candidates = 0`）复测：49 px 行内可见 6 个、其余
+  靠横滑，说明“全部”只是视口宽度所限，没有数量截断。
+
+### 词典扩充（已完成）
+
+用户先要求不要下载，本轮明确改为“现在下载去做词库扩充”。详见下一节。
+
+
+## 词库扩充与 640 上限（2026-11-16）
+
+用户要求的最终形态：候选数量为“全部”时不再截断，同时把词库扩到万象的规模。
+
+### 数据
+
+- 来源仍是 rime-wanxiang（CC BY 4.0），本轮使用提交
+  `6ab77371f1ba72154e74645965e53a287ce3cb39`（`wanxiang` 分支，2026-11-15）的
+  `zi.dict.yaml` 与 `jichu.dict.yaml`。
+- `tools/pinyin_dictgen --singles 40000 --words 150000` 产出 181,616 条；
+  `tools/pinyin_merge` 合并 `extra.txt`（新增 40 条、改写 78 条词频）后
+  181,656 行 / 4,313,422 字节（约 4.1 MB），是旧词表 20,069 条的 9 倍。
+- `tools/collocations/build.py` 同步重建字对表：40,000 对 / 532,416 字节。
+- 两个词表工具的音节表来源改成
+  `shared/cpp/include/pimeplug/pinyin.hpp::syllable_list()`。表从 parse 插件源码
+  搬走后，旧路径会静默解析出 0 个音节、生成空词表；现在同时兼容旧标记并默认
+  读共享头文件。
+- 词表与字对表已同步到 `plugins/translate/pime-pinyin-translate/assets/`。
+
+### 上限
+
+- `pime-pinyin-translate 1.3.0 → 1.4.0`：`kMaxCandidates`/`kMaxDirect`/
+  `g_max_candidates` 与 manifest 默认值全部 200 → 640。640 的依据是实测最大
+  单音节组：`yi` 549 条、`s` 640 条（封顶）、`shi` 260 条。
+- `pime-pinyin-rank 1.3.0 → 1.4.0`：`kMaxCandidates` 200 → 640，`page_size`
+  上限与默认 640。
+- `pime-candidates-format 1.4.0 → 1.5.0`：`kMaxShown` 200 → 640。
+- `tools/chains/android-pinyin.yaml` 写入 translate/rank `max_candidates: 640`、
+  rank/format `page_size: 640`；`android-english.yaml` format 1.5.0。两条
+  `.cbor` 重新生成，宿主 `CANDIDATE_PAGE_SIZE = 640`。
+- 面板与折叠条沿用既有设计：链一次给整表，3/5/7/9 是宿主本地窗口。
+
+### core 的 4 MB 资产上限
+
+4.1 MB 词表暴露了一个 core 的真实缺陷：`AssetService::read` 不看待调用方传入
+的 `len`，把“剩余全部字节”当成要读的长度，于是插件按 1 MB 分块读时每次都返回
+`PIME_BUFFER_TOO_SMALL`。修复：
+
+- `pime-core/src/capabilities/asset/asset.{hpp,cpp}`：`read` 增加 `len` 参数，
+  按 `min(剩余, len)` 拷贝，`out_len` 报告实际读到的字节数。
+- `pime-core/src/core/host_bridge.cpp`：把请求长度传给 `assets_.read(...)`。
+- 插件 `load_dict()` 以 1 MB 分块读入 `g_dict`（6 MB 静态缓冲），修复前设备上
+  每个 core 事件都是 `NOT_FOUND`。
+
+### 扩展词表下的纠错策略
+
+词表变大后，生僻整词会“挡住”自动纠错（`nihhao` 里的 `你还好` 当时权重 1089，
+却让 `你好` 不再胜出）。改为按词频分档：
+
+- 整词覆盖整串且 log2 分数 ≥ `kProtectMinEntryScore = 12200`（约为旧 16k 词表
+  会收录的常用词）时，才无条件否决纠正。
+- 更罕见的整词不否决纠正；比较前先按其多出的字母数补回 `kWordBonus`，再按
+  普通规则要求 `kCorrectionMargin = 6000` 的优势。
+- 测试：`006-compose` 适配扩展词表（`为什么` 仍是首位，`我什么` 可达）；
+  `030-correction-beats-typo` 改为 `nihhao → 你好`；新增
+  `031-fragmented-literal-kept`（`nihhaoo → 你很好喔`）。
+
+### 候选数组的 O(n²) 遍历
+
+设备上 640 条候选一度要 4–5 秒。分插件计时定位到 `ArrayView::at(index)`：
+它从数组头开始逐项跳过，按索引循环访问就是 O(n²)。`pime-candidates-format`
+的 `write_items` 对每个候选还要读 text/comment/label 多次，`pime-pinyin-rank`
+的解析、`hans-hant`/`shortcuts`/`learn-user-dict` 的合并循环也一样。
+
+修复：`ArrayView` 增加单次遍历的 `Cursor`（`cursor()` + `next()/map()`），
+以上热循环全部改用它；`shared/cpp/include/pimeplug/candidates.hpp` 的共享
+读取器同步修改。语义不变，插件测试全过。
+
+### 实测（MuMu 12 / Android 15 / x86_64 / debug 包）
+
+最小链（parse → translate → rank → format，640 条候选，输入 `s` 后再 `h`）：
+
+| 阶段 | 修复前 | 修复后 |
+|---|---|---|
+| translate | 225 ms | 222 ms |
+| rank | 1,158 ms | 41 ms |
+| format | 3,440 ms | 45 ms |
+| apply_commands（JNI + Java 候选栏） | 58 ms | 27 ms |
+| 单次按键合计 | 4,964 ms | 299 ms |
+
+完整 20 插件链：`sh`（640 条）596 ms，其中 15 个下游插件每个 8–25 ms
+（每帧都携带 53 KB 的候选工作区）；`shi`（260 条）206 ms。启动后第一次按键
+额外花 150–250 ms 解析词表。
+
+原生基准（`E:/pime/_ref/bench.py`、`bench_chain.py`，修复后）：`s` 的
+translate 3.5 ms、rank 8.7 ms、format 6.0 ms；`woshizhongguoren` 13.1 ms/次。
+
+### 验证
+
+- 插件原生用例：`ctest --test-dir build/native` 全过（284/284）。
+- `./gradlew assembleDebug testDebugUnitTest` 通过。
+- 设备：`shi` 日志 `candidates=260`；折叠条点第 2 项「时」提交正确；展开面板
+  显示词频网格与音节侧栏，点「师」提交正确，说明全局下标没有因扩容而串位。
+
+### 已知代价
+
+- 单音节（`s`/`sh`）产出的 640 条候选是最坏路径，模拟器上约 0.6 s/键；主要
+  开销是 translate 扫描该首字母全部词条，以及 15 个下游插件重复读取携带
+  640 条候选的工作区帧。候选数量偏好（3/5/7/9）只影响显示窗口，不会减少链的
+  计算量。
+- 尚未在 arm64 物理设备上测延迟。

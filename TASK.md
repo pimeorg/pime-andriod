@@ -210,3 +210,28 @@
 - [ ] 侧栏「首笔画」固定在底部（音节多时目前要滚到底才能点到）
 - [ ] 空输入框里的手写入口（目前只在有组合/候选时可展开面板）
 - [ ] 横屏时手写画布与结果条的比例
+- [x] 候选数量=全部时不再封顶：translate/rank/format 上限 32 → 200，
+      translate 在束搜索之外补整串直配表，format 的 `pime_init` 不再把
+      `page_size` 锁死在 9（此前链里的 200 被静默忽略）
+- [x] 宿主一次向链要整页候选，3/5/7/9 改为本地窗口翻页（`stripOffset`），
+      空格在翻页后提交窗口首项；折叠条候选视图复用，不再每次重建整排
+- [x] 选词不再限制 9/数字键：`selectCandidate` 接受任意全局下标
+- [x] 展开面板去掉 5 页上限（`GRID_PAGE_GUARD` 防死循环）
+- [x] 插件版本 1.3.0 / 1.3.0 / 1.4.0 同步进 yaml、CBOR 与 `assets/plugins/`
+- [x] 三层上限再提到 640（translate/rank 1.4.0、format 1.5.0），依据是实测
+      `yi` 549、`s` 640、`shi` 260；链设置、CBOR、`CANDIDATE_PAGE_SIZE` 同步
+- [x] 扩充词库：rime-wanxiang `6ab7737` 的 `zi.dict.yaml` + `jichu.dict.yaml`，
+      4 万单字 + 15 万词，合并后 181,656 条 / 4.1 MB（旧 20,069 条的 9 倍），
+      字对表 40,000 对 / 520 KB，已同步进插件资产
+- [x] 修复 `AssetService::read` 忽略调用方 `len` 的缺陷（词表 >4 MB 时 1 MB
+      分块读全部 `BUFFER_TOO_SMALL`）；插件改为分块加载 4.1 MB 词表
+- [x] 扩展词表下的纠错分档：整词 log2 分数 ≥ 12200 才无条件否决纠正，
+      罕见整词按词长加成后比较；测试 006/030 更新、031 新增
+- [x] 修复候选数组 `ArrayView::at()` 的 O(n²) 遍历：新增 `Cursor` 单次游标，
+      format/rank/hans-hant/shortcuts/learn-user-dict/共享读取器全部改用；
+      设备上 640 条候选的单键从 4.96 s 降到 0.30 s（最小链）
+- [x] `ctest` 插件用例 284/284、`assembleDebug testDebugUnitTest` 全过
+- [x] MuMu 实测：`shi` 260 条、`sh` 640 条；折叠条选「时」、面板选「师」
+      均提交正确；面板词频网格与音节侧栏正常
+- [ ] arm64 物理设备上测 640 候选的实际按键延迟（模拟器上 `sh` 约 0.6 s，
+      主要是 15 个下游插件重复读取携带 640 条候选的 53 KB 工作区帧）
