@@ -43,6 +43,7 @@ NDK 28.2.13676358、CMake 3.31.6）；Gradle 8.14.5（缓存分发 + wrapper）�
 | 宿主能力授权（`pime_core_permission`） | `pime_jni.cpp`、`PimeCore.java`、`PimeImeService.java` |
 | MuMu 12（Android 15 / x86_64）实机验证 | 见“验证” |
 | debug APK 产出 | `app/build/outputs/apk/debug/app-debug.apk` |
+| release 签名 + R8 产出 | `app/build.gradle`、`app/proguard-rules.pro`、`app/pime-release.jks`（不入库） |
 | 宿主 smoke test | 临时工程（非仓库内），见下 |
 | 候选栏展开（微信输入法式 `⌄`） | `PimeImeService.java`、`tools/chains/android-pinyin.yaml` |
 
@@ -1187,3 +1188,70 @@ WeaveText 的离线 ASR 之前只有 WASM 占位插件，pime 也没有宿主音
 - 复测小坑：横屏截图是 1920×1080，而看图时按显示宽度换算会差一个比例
   （1624/1920）；`input tap` 用的是真实像素，先按 uiautomator 的 bounds 校准
   再点，否则会点到空格/句号上。
+
+## Release 构建：签名与 R8（2026-11-16）
+
+`TASK.md` 里一直挂着的「release 签名与混淆」这一轮补上：先前只有 `assembleDebug`
+可用，release 是 `minifyEnabled false` 且没有签名配置，等于装不进设备（未签名
+APK 系统会拒装）。
+
+### 签名材料不进仓库
+
+- 仓库根目录放 `keystore.properties`（`storeFile` / `storePassword` / `keyAlias`
+  / `keyPassword`）与 `app/pime-release.jks`（PKCS12、RSA 4096、10000 天），两者
+  都进 `.gitignore`。`app/build.gradle` 只在**文件存在且指向的 keystore 存在**时
+  才创建 `signingConfigs.release`，否则 release 继续能构建、只是不签名——这样
+  干净检出上跑 `assembleRelease` 做校验不会被缺密钥挡住。
+- v1 签名显式打开（`enableV1Signing true`）：minSdk 是 24，API 24/25 只认 v1；
+  v2 同时打开。`apksigner verify --print-certs` 显示单签名者、SHA-256
+  `d8:e0:48:78…`。
+
+### R8 要保住的东西
+
+混淆的唯一硬约束来自 JNI，两边都不在编译期检查：
+
+1. **导出的符号名**：`pime_jni.cpp` 里是 `Java_com_pimeorg_pime_PimeCore_nativeStart`
+   这类固定名字，类名或方法名被重命名就 `UnsatisfiedLinkError`。
+2. **回调方法名**：native 拿到 `thiz` 后按字符串 `GetMethodID` 查
+   `onNativeComposition` / `onNativeCommit` / `onNativeCandidates` /
+   `onNativeHideCandidates` / `onNativeBeep` / `onNativeNotify` / `onNativeWake` /
+   `onNativeLog` 及其签名。
+
+因此 `app/proguard-rules.pro` 里 `-keep class com.pimeorg.pime.PimeCore { *; }`
+（整类 + 包名），外加通用的 `-keepclasseswithmembernames class * { native <methods>; }`。
+清单里声明的组件（`PimeApplication` / `PimeImeService` / `SettingsActivity` /
+`VoicePermissionActivity`）AGP 会自动保，规则里也写了一条以表明意图。
+
+Java 层没有任何反射式查找（无 `Class.forName` / `getMethod` / `getIdentifier`），
+所以除 JNI 之外不需要额外 keep。`commons-compress` 会探测未随包的可选后端
+（XZ / zstd / brotli），加了对应的 `-dontwarn`；语音模型是 tar+bzip2，bzip2 是
+库自带实现。
+
+### 体积
+
+| | debug | release |
+|---|---|---|
+| APK | 35.4 MB | 25.3 MB |
+| `classes.dex` | — | 1.4 MB |
+
+差的主要是 native 调试符号（`extractReleaseNativeSymbolTables` 另存到
+`build/outputs/native-debug-symbols/`）与 R8 收缩；`.so` 本身未重新编译。
+
+### 验证（MuMu 12 / Android 15 / x86_64，卸载 debug 后全新安装）
+
+签名不同必须先 `adb uninstall`，因此这一轮顺带验证了「首启从 assets 重装插件与链」。
+
+- 冷启日志：19 个插件全部 `plugin loaded`、`chain built: default.cbor` /
+  `english.cbor`、`speech generation built`、`active generation: chinese`，
+  无 `UnsatisfiedLinkError` / `NoSuchMethodError` / `ClassNotFoundException`。
+- `nihao` → 候选 你好/您好/年好/念好 → 空格提交为「你好」。
+- `shi` → 行末 `⌄` → 两行网格 → 点第 7 个「市」上屏，联想刷新为「场」。
+- 插件与链页：链方案、19 个插件的 `序号 · 中文名`、`role · version`、描述、
+  上移下移与开关全部正常（清单与 CBOR 解析在 R8 后无损）。
+- 关于页版本显示 `0.1.0`，没有 debug 后缀（`BuildConfig.DEBUG` 已是 false）。
+- 语音：数据被清空后长按空格 → 先弹权限 → 授予后提示下载 → 直连 GitHub
+  `Connection reset`，自动回退 ghproxy 镜像下载成功，`bzip2 + tar` 解包在 R8
+  下正常；再长按得到 `listening, session=1`，MuMu 无宿主麦克风所以采到
+  `capture read: -5` 后 `stopped, 0 chars`，与 debug 行为一致。
+- 未验证：release 下的语音回放（`voiceReplay` 由 `BuildConfig.DEBUG` 关掉），
+  与 arm64 真机一致仍待物理设备。

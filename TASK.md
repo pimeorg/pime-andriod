@@ -125,7 +125,14 @@
       两行（是/时/十/事/拾 · 使/市/式），键盘位置不动，点第 7 个「市」上屏为
       `heln.市`；横屏时 IME 变高会把编辑器整块挤出可见区，属已知取舍
 - [ ] arm64 物理设备验证
-- [ ] release 签名与混淆
+- [x] release 签名与混淆：`keystore.properties` + `app/pime-release.jks`（均不进仓库，
+  缺失时 release 仍可构建但未签名）；`minifyEnabled`+`shrinkResources`，
+  `proguard-rules.pro` 钉住 JNI 符号（`PimeCore` 包名/类名/native 方法/`onNative*`
+  回调）；APK 35.4 MB → 25.3 MB，v1+v2 签名
+- [x] MuMu 实测 release（R8 后）：19 个插件加载、default/english/speech 三代构建、
+  `nihao` → 你好、空格提交、`shi` 展开网格点第 7 个「市」、插件与链页、关于页
+  `0.1.0`（无 debug 后缀）、语音权限引导与模型下载（GitHub 超时→ghproxy 镜像，
+  bzip2/tar 解包在 R8 下正常）、长按空格 `listening, session=1`
 - [x] 修复内置插件包资产缺失：`pinyin.collocations` 与 predict-context 两个 TSV；
       插件 CMake `ASSETS` 补齐并重出包
 - [x] APK 更新时刷新内置插件包与 core 的 `<id>/<version>` 副本，旧安装无需

@@ -8,6 +8,18 @@ def speechPluginDir = new File(project.findProperty("speechPluginDir")
         ?: new File(rootProject.projectDir.parentFile,
                 "pime-public-plugin/plugins/recognize/pime-speech-sherpa").absolutePath)
 
+/* Release signing secrets live outside the repository (git-ignored
+ * keystore.properties + keystore). Without them the release build stays
+ * unsigned instead of failing, so ordinary "assembleRelease" checking still
+ * works on a clean checkout. */
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.isFile()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+def hasReleaseKeystore = keystorePropertiesFile.isFile()
+        && rootProject.file(keystoreProperties.getProperty("storeFile", "")).isFile()
+
 android {
     namespace "com.pimeorg.pime"
     compileSdk 36
@@ -49,12 +61,33 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword keystoreProperties.getProperty("storePassword")
+                keyAlias keystoreProperties.getProperty("keyAlias")
+                keyPassword keystoreProperties.getProperty("keyPassword")
+                /* v1 is still needed on API 24/25 (minSdk 24); v2/v3 stay on
+                 * for everything newer. */
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
+
     buildTypes {
         debug {
             debuggable true
         }
         release {
-            minifyEnabled false
+            if (hasReleaseKeystore) signingConfig signingConfigs.release
+            /* R8 shrinks and obfuscates the Java shell; the JNI symbol names
+             * are pinned in proguard-rules.pro. */
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
         }
     }
 

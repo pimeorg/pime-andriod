@@ -8,3 +8,8 @@ local.properties
 *.aab
 third_party/
 screenshots/
+
+# release signing material (never commit)
+keystore.properties
+*.jks
+*.keystore

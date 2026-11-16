@@ -65,6 +65,37 @@ pime-android/
 
 （`app/build.gradle` 通过 `pimeCoreDir` 传给 CMake 的 `PIME_CORE_DIR`。）
 
+### Release（签名 + R8）
+
+`assembleRelease` 走 R8（`minifyEnabled` + `shrinkResources`），保留规则在
+`app/proguard-rules.pro`：JNI 侧按符号名调用
+`Java_com_pimeorg_pime_PimeCore_native*`，并按方法名回调 `onNative*`，所以
+`PimeCore` 整类连同包名都不能重命名。
+
+签名材料不进仓库（`.gitignore` 已挡 `keystore.properties` / `*.jks`）：
+
+```properties
+# keystore.properties（仓库根目录）
+storeFile=app/pime-release.jks
+storePassword=...
+keyAlias=pime
+keyPassword=...
+```
+
+```bash
+keytool -genkeypair -v -keystore app/pime-release.jks -alias pime \
+        -keyalg RSA -keysize 4096 -validity 10000 \
+        -storetype PKCS12 -storepass <storePassword> -keypass <keyPassword> \
+        -dname "CN=PIME Android, O=PIME, C=CN"
+./gradlew assembleRelease
+# 产物: app/build/outputs/apk/release/app-release.apk（约 25 MB，v1+v2 签名）
+# R8 报告: app/build/outputs/mapping/release/{mapping,usage,seeds}.txt
+```
+
+没有 `keystore.properties` 时 release 仍可构建（只是不签名），方便干净检出上
+跑 `assembleRelease` 做校验。release 与 debug 签名不同，切到 release 前需要先
+`adb uninstall com.pimeorg.pime`（应用数据随之清空，内置插件与链会在首启重装）。
+
 安装与启用：
 
 ```bash
