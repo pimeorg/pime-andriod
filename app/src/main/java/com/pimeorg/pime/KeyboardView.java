@@ -366,12 +366,13 @@ public final class KeyboardView extends View {
                 label = theme.keyText;
                 break;
             case KIND_LANGUAGE:
-                /* The globe icon carries the state instead of a 中/英 label:
-                 * accent while the English chain is active. */
-                onAccent = english;
+                /* The two characters are drawn by drawLanguage: the active
+                 * side needs its own colour and weight, so the frame is the
+                 * plain function-key one. */
+                onAccent = false;
                 face = pressed ? theme.keyFuncPressed : theme.keyFunc;
                 edge = theme.keyFuncEdge;
-                label = english ? theme.accent : theme.keyFuncText;
+                label = theme.keyFuncText;
                 break;
             case KIND_SPACE:
                 /* A live voice turn paints the space key like the accent keys:
@@ -416,7 +417,7 @@ public final class KeyboardView extends View {
                 drawEnter(canvas, cx, cy, label);
                 break;
             case KIND_LANGUAGE:
-                drawGlobe(canvas, cx, cy, label);
+                drawLanguage(canvas, cx, cy, keyRect);
                 break;
             case KIND_SYMBOLS:
             case KIND_LETTERS:
@@ -480,23 +481,60 @@ public final class KeyboardView extends View {
     }
 
     /**
-     * The 中/英 key as a globe: circle, meridian and equator arcs. The active
-     * side is told by the colour (accent while the English chain is up) rather
-     * than by two glyphs of text.
+     * 中/英 as a two-cell switch: 中 on the left, 英 on the right, a hairline
+     * between them. The active side is bold and in the key text colour, the
+     * other one recedes into the hint colour, so the state reads at a glance
+     * without a second highlight. The whole label is scaled down as one piece
+     * when the key is narrower than the two characters need.
      */
-    private void drawGlobe(Canvas canvas, float cx, float cy, int color) {
-        final float r = dp(9);
-        glyphPaint.setColor(color);
-        glyphPaint.setStrokeWidth(dp(1.7f));
-        canvas.drawCircle(cx, cy, r, glyphPaint);
-        final RectF meridian = new RectF(cx - r * 0.44f, cy - r,
-                cx + r * 0.44f, cy + r);
-        canvas.drawOval(meridian, glyphPaint);
-        canvas.drawLine(cx - r, cy, cx + r, cy, glyphPaint);
-        canvas.drawLine(cx - r * 0.86f, cy - r * 0.5f,
-                cx + r * 0.86f, cy - r * 0.5f, glyphPaint);
-        canvas.drawLine(cx - r * 0.86f, cy + r * 0.5f,
-                cx + r * 0.86f, cy + r * 0.5f, glyphPaint);
+    private void drawLanguage(Canvas canvas, float cx, float cy, RectF rect) {
+        final float scaled = getResources().getDisplayMetrics().scaledDensity;
+        final float size = Math.min(14f * scaled, rect.height() * 0.34f);
+        final float divider = Math.max(dp(1), size * 0.03f);
+        final float gap = size * 0.26f;
+
+        textPaint.setTextSize(size);
+        textPaint.setFakeBoldText(true);
+        final float active = Math.max(textPaint.measureText("中"),
+                textPaint.measureText("英"));
+        textPaint.setFakeBoldText(false);
+        final float idle = Math.max(textPaint.measureText("中"),
+                textPaint.measureText("英"));
+        final float width = active + idle + gap * 2 + divider;
+        final float fit = Math.min(1f, (rect.width() - dp(8)) / width);
+
+        final Paint.FontMetrics metrics = textPaint.getFontMetrics();
+        final float baseline = -(metrics.ascent + metrics.descent) / 2f;
+        final int dividerColor = (theme.hint & 0x00FFFFFF) | 0x70000000;
+
+        canvas.save();
+        canvas.translate(cx, cy);
+        canvas.scale(fit, fit);
+        final float left = -width / 2f;
+
+        drawLangChar(canvas, "中", left + active / 2f, baseline, size,
+                !english ? theme.keyFuncText : theme.hint, !english);
+
+        /* keyPaint is a fill paint and the key face re-sets its colour every
+         * frame, so the hairline can borrow it instead of touching the stroke
+         * paint the glyphs share. */
+        keyPaint.setColor(dividerColor);
+        canvas.drawRect(left + active + gap, -size * 0.52f,
+                left + active + gap + divider, size * 0.52f, keyPaint);
+
+        drawLangChar(canvas, "英", left + active + gap * 2 + divider + idle / 2f,
+                baseline, size,
+                english ? theme.keyFuncText : theme.hint, english);
+        canvas.restore();
+    }
+
+    private void drawLangChar(Canvas canvas, String character, float x,
+                              float baseline, float size, int color,
+                              boolean bold) {
+        textPaint.setTextSize(size);
+        textPaint.setFakeBoldText(bold);
+        textPaint.setColor(color);
+        canvas.drawText(character, x, baseline, textPaint);
     }
 
     /**
