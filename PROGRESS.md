@@ -510,7 +510,9 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
 - Lua（`PIME_BUILD_LUA`）未启用：Lua 插件包仍不能在 APK 内执行；WASM 已经可用。
 - 未在物理设备上运行：实测环境为 MuMu 12 的 Android 15 x86_64 模拟器，覆盖
   JNI、WAMR 执行与 InputConnection 路径，但未覆盖 arm64 真机与厂商 ROM 差异。
-- 只有 debug 签名；未配置 release 签名与混淆。
+- release 已签名并过 R8（见本文“Release 构建”一节），但没有 AAB / Play 分发
+  流程，也只有一个 ABI 组合（arm64-v8a + x86_64）；未做混淆白名单之外的
+  进一步加固（无完整性校验、无签名校验）。
 - 链里可以引用没装包的插件（页面会标「未安装」），但宿主不阻止这种链被激活，
   也还没有“一键清掉缺失插件”的操作。
 - 链的处理顺序只在页面内用上移/下移调整，没有拖拽排序；5 个以内的链够用，
@@ -519,10 +521,9 @@ wasm32-ndk 工具链以 freestanding 方式产出，未定义符号全部是 `en
   旧版本留下的 `files/plugins/<id>/<version>/` 目录不会显示，也不会被清理。
 - 插件的中文名/设置项中文名是硬编码映射（`SettingsActivity.pluginLabel` /
   `settingLabel`），第三方插件只能显示原始 id 与键名。
-- 插件包只在首次启动时从 `assets/` 复制到 `files/plugins/`；`adb install -r`
-  保留应用数据，因此重装 APK 不会更新插件；随包插件的更新仍要靠
-  `pm clear`（会清空设置）或提升插件版本号。第三方/新插件则可以用页面上的
-  「导入插件包」装进来，不必再 `adb push`。
+- 随包插件按 APK 的 `lastUpdateTime` 刷新（有 baseline 保护链的用户修改），
+  因此 `adb install -r` 升级 APK 会同步更新插件，不再需要 `pm clear`；
+  第三方/新插件仍用页面上的「导入插件包」装进来，不必 `adb push`。
 - 页面只能导入、不能卸载插件包（`files/plugins` 下的目录要手动删）。导入后的
   包是否有 core 能加载，宿主并不知道：只有清单缺本机 ABI 时会在导入前提醒一句，
   其它拒绝（签名、依赖、ABI major）要等 core 报 `NOT_FOUND` / `CORRUPT`，
@@ -1255,3 +1256,11 @@ Java 层没有任何反射式查找（无 `Class.forName` / `getMethod` / `getId
   `capture read: -5` 后 `stopped, 0 chars`，与 debug 行为一致。
 - 未验证：release 下的语音回放（`voiceReplay` 由 `BuildConfig.DEBUG` 关掉），
   与 arm64 真机一致仍待物理设备。
+
+### 当前设备状态
+
+MuMu 12（`127.0.0.1:16384`）现在装的是 **release** 签名包，并已授予
+`RECORD_AUDIO`、语音模型已下载到 `files/models/asr-stream-small`。因此下一轮
+要装 debug 包时必须先 `adb uninstall com.pimeorg.pime`（签名不同，`install -r`
+会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`），代价是应用数据（含 21 MB 模型）
+一起清空。
