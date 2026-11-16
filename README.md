@@ -108,13 +108,14 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
 - 语音输入只有一个人口：长按空格键说话，松开结束并提交。长按判定的阈值就用
   系统 `ViewConfiguration.getLongPressTimeout()`（跟随无障碍设置）；短按空格
   仍然是空格，长按期间滑出键区也不会变成别的按键。识别走独立的「语音代」：
-  平时停在中文/英文代，按住时空格键高亮成强调色并在下方显示「松开结束」，
-  停下后切回原代，按键链不受影响。宿主用
+  平时停在中文/英文代，按住时空格键整键换成强调色、键面上只留一个麦克风
+  图标，停下后切回原代，按键链不受影响。宿主用
   `AudioRecord(VOICE_RECOGNITION, 16 kHz, mono, s16le)`
   采集，PCM 经 `pime_core_audio_in` 进入 core 音频环；插件用
   `audio.capture` 读取并把识别结果作为 `set_composition`/`commit` 回写。
   插件是 `runtime: native` 的 `pime-speech-sherpa`，`plugin.so` 从
-  `nativeLibraryDir` 复制到插件包后设为只读。空格的空闲副标签是「长按语音」。
+  `nativeLibraryDir` 复制到插件包后设为只读。空格键的空闲态是「空格」标签
+  加一个静音色的麦克风图标，不靠文字说明长按手势。
 - 语音开不了时（密码框、缺插件、缺模型、缺 `RECORD_AUDIO`）长按不会吞键：
   宿主提示原因后返回「未开始」，松手照旧是一个空格。缺模型时
   `VoiceModels` 从 GitHub release 镜像下载

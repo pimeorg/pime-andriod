@@ -410,28 +410,77 @@ public final class KeyboardView extends View {
             case KIND_LANGUAGE:
                 drawLanguage(canvas, cx, cy, keyRect);
                 break;
+            case KIND_SPACE:
+                drawSpace(canvas, key, keyRect, label, onAccent);
+                break;
             default:
                 drawLabel(canvas, key, keyRect, label, onAccent);
                 break;
         }
     }
 
+    /**
+     * The space key carries the voice entry, so it is drawn as a key with a
+     * glyph instead of extra words: idle it is the usual 空格 with a muted mic
+     * under it, and while a turn is open the key becomes the recording
+     * indicator — accent fill plus one large mic, no text at all.
+     */
+    private void drawSpace(Canvas canvas, Key key, RectF rect, int color,
+                           boolean onAccent) {
+        if (voiceLive) {
+            drawMic(canvas, rect.centerX(), rect.centerY() + dp(1), color,
+                    Math.min(rect.height() * 0.19f, dp(13)));
+            return;
+        }
+        /* The same bottom band the swipe-up digits use: label above, glyph
+         * below, both following the key height so landscape rows still fit. */
+        final float scaled = getResources().getDisplayMetrics().scaledDensity;
+        final float hint = Math.min(11f * scaled, rect.height() * 0.22f);
+        final float band = hint * 1.1f + dp(4);
+        final float size = Math.min(22f * scaled, rect.height() * 0.42f);
+        textPaint.setTextSize(size);
+        textPaint.setColor(color);
+        textPaint.setFakeBoldText(onAccent);
+        final Paint.FontMetrics metrics = textPaint.getFontMetrics();
+        canvas.drawText(key.label, rect.centerX(),
+                rect.top + (rect.height() - band) / 2f
+                        - (metrics.ascent + metrics.descent) / 2f, textPaint);
+        final float mic = Math.min(hint * 0.55f, dp(6));
+        drawMic(canvas, rect.centerX(),
+                rect.bottom - dp(4) - hint * 0.5f + mic * 0.09f,
+                theme.hint, mic);
+    }
+
+    /**
+     * A microphone: capsule head, cradle arc, stem and base, stroke-only like
+     * the other key glyphs so it reads at the same weight as the arrows and the
+     * backspace key. {@code s} is roughly the half height.
+     */
+    private void drawMic(Canvas canvas, float cx, float cy, int color, float s) {
+        glyphPaint.setColor(color);
+        glyphPaint.setStyle(Paint.Style.STROKE);
+        glyphPaint.setStrokeWidth(Math.max(dp(1f), s * 0.22f));
+        final float head = s * 0.34f;
+        final RectF capsule = new RectF(cx - head, cy - s,
+                cx + head, cy + s * 0.14f);
+        canvas.drawRoundRect(capsule, head, head, glyphPaint);
+        final RectF cradle = new RectF(cx - s * 0.64f, cy - s * 0.52f,
+                cx + s * 0.64f, cy + s * 0.52f);
+        canvas.drawArc(cradle, 0f, 180f, false, glyphPaint);
+        canvas.drawLine(cx, cy + s * 0.52f, cx, cy + s * 0.82f, glyphPaint);
+        canvas.drawLine(cx - s * 0.46f, cy + s * 0.82f,
+                cx + s * 0.46f, cy + s * 0.82f, glyphPaint);
+    }
+
     private void drawLabel(Canvas canvas, Key key, RectF rect, int color,
                            boolean onAccent) {
-        final boolean space = key.kind == KIND_SPACE;
         String label = key.label;
         if (shift && key.isLetter()) label = label.toUpperCase();
-        if (space && voiceLive) {
-            label = getContext().getString(R.string.space_voice_release);
-        }
-        final String hint = key.hint != null ? key.hint
-                : space && !voiceLive
-                        ? getContext().getString(R.string.space_voice_hint)
-                        : null;
+        final String hint = key.hint;
         final float scaled = getResources().getDisplayMetrics().scaledDensity;
         float size = (label.length() > 1 ? 15f : 22f) * scaled;
         float centerY = rect.centerY();
-        if (hint != null && (key.kind == KIND_CHAR || space)) {
+        if (hint != null && key.kind == KIND_CHAR) {
             /* Leave a band at the bottom for the digit and keep the letter
              * above it; both sizes follow the key height so landscape rows do
              * not collide. */

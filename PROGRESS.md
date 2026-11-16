@@ -1026,10 +1026,14 @@ WeaveText 的离线 ASR 之前只有 WASM 占位插件，pime 也没有宿主音
   `onVoiceRelease(true)`（丢弃）。长按期间 `ACTION_MOVE` 直接吞掉，
   滑出键区也不会落到别的键上；`clearPressed` 与 `onDetachedFromWindow`
   都会撤掉定时器。
-- 视觉：空格键空闲时副标签是「长按语音」（复用副标签的排版，字母键的上滑
-  数字不受影响）；按住期间整键填强调色、标签换成「松开结束」，副标签隐藏，
-  因为录音指示器原来挂在工具栏麦克风上。长按判定成功补一次
-  `LONG_PRESS` 触感，与普通按键的 `KEYBOARD_TAP` 区分。
+- 视觉：说话手势不靠文字。`drawSpace` 负责两种形态：空闲态沿用字母键的
+  「底部窄带」排版——上方是「空格」标签、下方是 `drawMic` 画的静音色小
+  麦克风，字母键的上滑数字不受影响；按住期间整键填强调色，标签和图标都
+  换成键面中央一个大麦克风（ `onAccent` 描边），因为录音指示器原来挂在
+  工具栏麦克风上。麦克风与 Shift / 回车 / 退格同为一套描边字形（胶囊头 +
+  托架弧 + 支撑 + 底座），静态图解在截图像素上核过：空闲 24×34 px、按住
+  约 40×54 px，笔画宽度随半高缩放（上限 `dp(1)`/比例 0.22）。长按判定
+  成功补一次 `LONG_PRESS` 触感，与普通按键的 `KEYBOARD_TAP` 区分。
 - `KeyboardView.Listener` 新增 `onVoiceHold()` / `onVoiceRelease(cancelled)`，
   `isSwipeUp` 额外要求 `key.up != null`，避免将来给空格加副标签时把上滑
   当成空输出。
@@ -1042,8 +1046,9 @@ WeaveText 的离线 ASR 之前只有 WASM 占位插件，pime 也没有宿主音
   结束的回合。
 - `ImeToolbar`：删掉 `TOOL_VOICE` 与 `setVoiceActive`，只剩页切换、粘贴、
   设置、收起；`ic_mic.xml` 与 `ime_action_voice*` 字符串一并删除，新增
-  `space_voice_hint` / `space_voice_release` / `voice_ready` /
-  `voice_permission_granted`。
+  `voice_ready` / `voice_permission_granted`。空格键上的手势提示改用字形后
+  `space_voice_hint` / `space_voice_release` 两条文案也删掉了，键面上不再出现
+  提示性文字。
 
 ### 验证（MuMu 12 / Android 15 / API 35 / x86_64）
 
@@ -1057,5 +1062,10 @@ WeaveText 的离线 ASR 之前只有 WASM 占位插件，pime 也没有宿主音
   之后键盘立即回到中文代；`uiautomator dump` 里试验输入框文本仍为空，
   说明长按没有多打一个空格。
 - 同一位置短按（`input tap`）：输入框内容变成 `' '`，短按仍是空格。
+- 空格键字形用截图做像素级核对（不看图也能判断形态）：空闲态键面为
+  `keyFunc`、底部窄带出现静音色（`theme.hint`）字形，包围盒 24×34 px，位图
+  呈「胶囊轮廓 + 托架弧 + 支撑 + 底座」；后台跑 4 s 同位长按、1.2 s 时截屏，
+  键面主色变成 `accentPressed`（`0xFF2559D0`），键面中央是 `onAccent` 白色
+  麦克风（包围盒约 40×54 px），没有残留文字像素。
 - 未在物理设备上验证识别出的整句文本，但 `VOICE_STOP → commit` 这段
   （插件 `stop` 补尾音并 `commit`）本次未改动，仍按上一节回放用例覆盖。
