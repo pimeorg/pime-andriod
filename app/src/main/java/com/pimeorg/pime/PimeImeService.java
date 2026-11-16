@@ -72,6 +72,9 @@ public final class PimeImeService extends InputMethodService
 
     private static final int TOP_BAR_HEIGHT_DP = 44;
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
+    /** Characters of editor context reported to the predictor. */
+    private static final int SURROUNDING_BEFORE = 64;
+    private static final int SURROUNDING_AFTER = 32;
     /** The preedit gets its own line above the candidate strip. */
     private static final int COMPOSITION_ROW_HEIGHT_DP = 30;
     /** Keys are laid out inside the view; this is everything around the four rows. */
@@ -89,6 +92,8 @@ public final class PimeImeService extends InputMethodService
     private CandidateStrip candidateScroll;
     private TextView compositionView;
     private String composition = "";
+    /** Password fields never hand their text to the chain. */
+    private boolean secureField;
     /** Syllable bounds in the composition, in UTF-16 units; empty when unknown. */
     private int[] compositionStarts = new int[0];
     private int[] compositionEnds = new int[0];
@@ -431,6 +436,7 @@ public final class PimeImeService extends InputMethodService
             ic.finishComposingText();
         }
         ic.commitText(text, 1);
+        refreshSurrounding();
     }
 
     /** Rounded pill with a themed ripple; {@code fill} 0 keeps it transparent. */
@@ -482,6 +488,7 @@ public final class PimeImeService extends InputMethodService
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
         composition = "";
+        secureField = isPassword(attribute.inputType);
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
         if (!coreReady) return;
@@ -499,11 +506,23 @@ public final class PimeImeService extends InputMethodService
                 ? "" : attribute.packageName;
         final boolean password = isPassword(attribute.inputType);
         final int hostCaps = PimeCore.HOST_CANDIDATES | PimeCore.HOST_TOUCH
-                | PimeCore.HOST_SECURE;
+                | PimeCore.HOST_SECURE | PimeCore.HOST_SURROUNDING;
         report(core.context(app, fieldType(attribute.inputType),
                 PimeCore.INPUT_KEYBOARD, "zh_CN", 20, hostCaps), "context");
         report(core.secure(password), "secure");
         report(core.focus(true), "focus");
+    }
+
+    /**
+     * The view exists by the time this runs, so predictions computed from the
+     * field's existing text can be shown immediately instead of waiting for
+     * the first key.
+     */
+    @Override
+    public void onStartInputView(EditorInfo info, boolean restarting) {
+        super.onStartInputView(info, restarting);
+        if (info != null) secureField = isPassword(info.inputType);
+        refreshSurrounding();
     }
 
     @Override
@@ -551,6 +570,12 @@ public final class PimeImeService extends InputMethodService
             }
         }
         passThrough(key, text);
+        /* The editor text changed without the chain seeing a commit
+         * (backspace, punctuation, enter): association candidates must follow
+         * what is actually before the cursor, not the last committed word.
+         * Only a visible strip can go stale, so plain deleting costs no
+         * extra chain round trip. */
+        if (composition.isEmpty() && !candidates.isEmpty()) refreshSurrounding();
     }
 
     /**
@@ -588,6 +613,30 @@ public final class PimeImeService extends InputMethodService
     private void appendSpace() {
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null) ic.commitText(" ", 1);
+    }
+
+    /**
+     * Re-derives association candidates from the text actually in the editor.
+     *
+     * <p>The predict plugins fall back to their own "last committed word"
+     * state whenever no surrounding text arrives, so after a delete that word
+     * is still offered as context even though it is gone from the field
+     * (`你好` deleted to empty still showed 吗/啊/的). Reporting the real text
+     * makes the chain prefer it; an empty field has no context to predict
+     * from, so the old strip is dropped instead.
+     */
+    private void refreshSurrounding() {
+        if (!coreReady || !core.hasSession() || secureField) return;
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        final CharSequence before = ic.getTextBeforeCursor(SURROUNDING_BEFORE, 0);
+        final CharSequence after = ic.getTextAfterCursor(SURROUNDING_AFTER, 0);
+        /* Predictions only describe the cursor's left context. Whatever the
+         * bar holds now belongs to the text before the edit. */
+        hideCandidates();
+        if (before == null || before.length() == 0) return;
+        report(core.surrounding(before.toString(),
+                after == null ? "" : after.toString()), "surrounding");
     }
 
     private void passThrough(KeyboardView.Key key, String text) {

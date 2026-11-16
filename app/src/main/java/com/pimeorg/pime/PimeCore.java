@@ -206,6 +206,16 @@ public final class PimeCore {
         return nativeReset(session);
     }
 
+    /**
+     * Reports the text around the cursor. Predict/association plugins prefer
+     * it over their own last-committed-word state, so the host must send it
+     * whenever the editor text changes outside the chain (delete, paste).
+     */
+    public int surrounding(String before, String after) {
+        if (session == 0) return -1;
+        return nativeSurrounding(session, before, after);
+    }
+
     public void pump() {
         if (core != 0) nativePump(core);
     }
@@ -281,6 +291,9 @@ public final class PimeCore {
     private native int nativeSecure(long session, boolean secure);
 
     private native int nativeReset(long session);
+
+    private native int nativeSurrounding(long session, String before,
+                                         String after);
 
     private native void nativePump(long core);
 

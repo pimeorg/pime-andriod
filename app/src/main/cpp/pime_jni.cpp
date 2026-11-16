@@ -574,6 +574,29 @@ Java_com_pimeorg_pime_PimeCore_nativeReset(JNIEnv*, jobject, jlong session) {
     return static_cast<jint>(pime_core_reset(value));
 }
 
+JNIEXPORT jint JNICALL
+Java_com_pimeorg_pime_PimeCore_nativeSurrounding(JNIEnv* env, jobject,
+                                                 jlong session,
+                                                 jstring before,
+                                                 jstring after) {
+    pime_session* value = session_of(session);
+    if (!value) return PIME_INVALID;
+    const std::string before_utf8 = from_jstring(env, before);
+    const std::string after_utf8 = from_jstring(env, after);
+    pime_text before_text{};
+    before_text.size = sizeof(pime_text);
+    before_text.version = PIME_ABI_MAJOR;
+    before_text.text = before_utf8.data();
+    before_text.text_len = static_cast<uint32_t>(before_utf8.size());
+    pime_text after_text{};
+    after_text.size = sizeof(pime_text);
+    after_text.version = PIME_ABI_MAJOR;
+    after_text.text = after_utf8.data();
+    after_text.text_len = static_cast<uint32_t>(after_utf8.size());
+    return static_cast<jint>(
+        pime_core_surrounding(value, &before_text, &after_text));
+}
+
 JNIEXPORT void JNICALL
 Java_com_pimeorg_pime_PimeCore_nativePump(JNIEnv*, jobject, jlong core) {
     if (pime_core* instance = core_of(core)) pime_core_pump(instance);

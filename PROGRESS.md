@@ -872,3 +872,31 @@ translate 插件就失败：按 `a` 时 logcat 是 `key 97: NOT_FOUND`，字段�
 - 英文：`hel` → 点 `help` → 按 `p`，拼音行为 `p`。
 - 数字选词：英文组合 `p` 时切符号页按 `2` 提交 `people`，返回字母页按 `p`，
   拼音行为 `p`。
+
+## 中文删除键后的联想残留（2026-11-15）
+
+用户反馈：中文输入下按删除键，联想候选行为异常。
+
+### 复现
+
+- `nihao` 提交 `你好` 后按一次退格，编辑框只剩 `你`，候选栏仍按 `你好` 出联想；
+  再按一次退格把编辑框清空，候选栏继续显示 `吗 / 啊 / 的`。
+- 根因：`pime-predict-context` 在收不到宿主 surrounding 时退回
+  `pime-learn-user-dict/last`（最后提交的词）。退格改的是编辑器文本，链并不
+  知道它已经变短，联想便针对已不存在的文本继续出词。
+
+### 改动
+
+- JNI/Java 补上 core 既有的 `pime_core_surrounding`（`PimeCore.surrounding`）。
+- `PimeImeService` 新增 `refreshSurrounding()`：从 `InputConnection` 读光标前后
+  文本，先收起旧联想，再上报真实上下文；左文为空时只收起（没有上下文可联想）。
+- 调用点：`onStartInputView`（进入输入框即按实际文本给联想）、链未处理的透传键
+  之后（退格/标点/回车等）、粘贴之后。密码字段不上报文本。
+- `reportContext` 的 host caps 增加 `HOST_SURROUNDING`。
+
+### 实测（MuMu 12 / Android 15 / x86_64）
+
+- `nihao` → `你好` 后联想 `吗 / 啊 / 的`；退格一次文本变 `你`，联想改为
+  `的 / 们`；再退格清空，联想栏收起。
+- 空输入框进入时不再显示上一次输入遗留的联想；组合内退格、标点与英文链行为
+  不变，logcat 无 `surrounding` 报错。
