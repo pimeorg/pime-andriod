@@ -1,0 +1,26 @@
+Hanzi helper data bundled with the PIME Android shell
+=====================================================
+
+mmah.bin
+--------
+Stroke templates for 9,507 characters, derived from Make Me a Hanzi's
+graphics.txt (via HanziLookupJS's mmah.json and the binary layout of
+gugray/hanzi_lookup).
+
+The underlying stroke data comes from fonts:
+  - Arphic PL KaitiM GB
+  - Arphic PL UKai
+and is redistributed under the Arphic Public License (see LICENSE-APL.txt).
+
+Java implementation: HandwritingRecognizer / HanziData are an independent
+implementation of the substroke matching method published by HanziLookup
+(Jordan Kiang), following the description in gugray/hanzi_lookup. No Rust
+source from that project is included.
+
+pinyin.tsv
+----------
+char<TAB>syllable, generated from the pinyin plugin's pinyin.dict, which is
+derived from rime-wanxiang (https://github.com/amzxyz/rime_wanxiang,
+CC BY 4.0). Only the most frequent reading per character is kept.
+
+Regeneration: tools/gen_hanzi_pinyin.py <path-to-pinyin.dict>

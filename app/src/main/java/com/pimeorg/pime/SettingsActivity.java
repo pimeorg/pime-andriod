@@ -444,6 +444,8 @@ public final class SettingsActivity extends AppCompatActivity {
             addDivider(notesCard, false);
             addTextBlock(notesCard, getString(R.string.about_data));
             addDivider(notesCard, false);
+            addTextBlock(notesCard, getString(R.string.about_handwriting));
+            addDivider(notesCard, false);
             addTextBlock(notesCard, getString(R.string.about_license));
         });
     }

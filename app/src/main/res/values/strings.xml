@@ -64,6 +64,7 @@
 
     <string name="about_intro">基于 pime-core 的 Android 宿主外壳。外壳只负责宿主：按键、编辑器交互、视图与权限；分词、词典、语言模型、候选与状态机全部由插件提供。</string>
     <string name="about_data">拼音词表基于 rime-wanxiang 生成，数据以 CC BY 4.0 授权，署名见仓库 data/pinyin/SOURCES.md。</string>
+    <string name="about_handwriting">手写找字的笔画模板来自 HanziLookup 的 mmah.bin（Make Me a Hanzi 字形，源自 Arphic 字体，以 Arphic Public License 授权）；单字拼音表由 rime-wanxiang 词表反推（CC BY 4.0）。识别算法为本应用独立实现，未使用 HanziLookup 的 LGPL 代码。许可全文随 APK 放在 assets/hanzi/。</string>
     <string name="about_license">本应用以 Apache License 2.0 授权，版权归 pime 贡献者所有。内置的 WAMR、sherpa-onnx 为 Apache 2.0，onnxruntime 为 MIT。</string>
 
     <string name="copy_path">复制路径</string>
@@ -109,6 +110,20 @@
     <string name="ime_action_expand">展开候选</string>
     <string name="ime_action_delete">删除前一个字</string>
     <string name="ime_action_collapse">收起候选</string>
+    <string name="ime_tab_frequency">词频</string>
+    <string name="ime_tab_single">单字</string>
+    <string name="ime_tab_handwriting">手写找字</string>
+    <string name="ime_rail_all">全部</string>
+    <string name="ime_rail_first_stroke">首笔画</string>
+    <string name="ime_stroke_heng">横</string>
+    <string name="ime_stroke_shu">竖</string>
+    <string name="ime_stroke_pie">撇</string>
+    <string name="ime_stroke_dian">点</string>
+    <string name="ime_stroke_zhe">折</string>
+    <string name="ime_handwriting_hint">在这里手写</string>
+    <string name="ime_handwriting_undo">撤销</string>
+    <string name="ime_handwriting_clear">清空</string>
+    <string name="ime_candidates_empty">没有候选</string>
     <string name="voice_unavailable_secure">密码输入框不能用语音</string>
     <string name="voice_unavailable_plugin">语音插件不可用</string>
     <string name="voice_unavailable_mic">麦克风打不开</string>

@@ -137,6 +137,12 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
 - 空链（`{"plugins": []}`）合法：所有按键返回 unhandled，由 Java 层交给编辑器。
 - 顶栏工具栏只做宿主动作：页切换、粘贴剪贴板纯文本、打开设置、收起键盘；
   粘贴在组合中会先结束组合并清掉候选，避免 `commitText` 顶掉正在输入的内容。
+- 候选行的 `⌃` 展开候选面板：面板与键盘同高、互斥显示，IME 总高度不变，
+  编辑器不重排。面板把整条候选（最多 5 页）摊成 5 列网格，选词按全局序号
+  `pime_core_candidate(index)` 提交。面板顶部分三类：词频（链的原顺序）、
+  单字（只留单字候选）、手写找字；词频/单字左侧有音节栏，按候选首字拼音
+  分组，另有「首笔画」二级筛选（横 / 竖 / 撇 / 点 / 折）。手写找字的内置
+  笔画模板在 `assets/hanzi/`，提交后清空画布并停在面板里继续找字。
 - 语音输入只有一个人口：长按空格键说话，松开结束并提交。长按判定的阈值就用
   系统 `ViewConfiguration.getLongPressTimeout()`（跟随无障碍设置）；短按空格
   仍然是空格，长按期间滑出键区也不会变成别的按键。识别走独立的「语音代」：
@@ -193,7 +199,9 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
 - MuMu 12 没有宿主麦克风输入，模拟器上只能验证采集线程与识别器加载；
   语音识别结果用 debug 回放钩子（`files/voice-test.wav`）验证，回放期间同样
   要按住空格，松手即提交。
-- 只有 debug 签名；release 签名与混淆未配置。
+- release 构建已带签名（`keystore.properties` 与 keystore 不入库）与 R8 混淆；
+  签名与已装的 debug 包不同，`adb install -r` 会报
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，需要先卸载。
 - 未在 arm64 物理设备上验证；已在 MuMu 12（Android 15 / API 35 / x86_64）上
   跑通插件加载、`nihao → 你好` 候选与提交、语音回放预编辑与提交。
 - 软键盘布局为字母/符号两页（字母、数字、Shift、退格、空格、回车、标点）。
@@ -217,9 +225,12 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
 | WAMR 2.4.1 | `third_party/wamr/` | Apache 2.0（见 `third_party/wamr/LICENSE`） |
 | sherpa-onnx 运行时 | `app/src/main/jniLibs/` | Apache 2.0 |
 | onnxruntime | `app/src/main/jniLibs/` | MIT |
+| 手写笔画模板 `hanzi/mmah.bin` | `app/src/main/assets/hanzi/` | Arphic Public License（数据源自 Make Me a Hanzi / Arphic 字形，见同目录 `LICENSE-APL.txt`、`NOTICE.txt`） |
+| 单字拼音表 `hanzi/pinyin.tsv` | `app/src/main/assets/hanzi/` | CC BY 4.0（由 rime-wanxiang 词表反推） |
 
 拼音词表数据另有 CC BY 4.0 署名要求，见 pime-public-plugin 的
-`data/pinyin/SOURCES.md`。
+`data/pinyin/SOURCES.md`。手写识别算法为本仓库的独立 Java 实现
+（`HandwritingRecognizer.java`），没有复制 HanziLookup 的 LGPL 源码。
 
 ## 对 pime-core 的改动
 

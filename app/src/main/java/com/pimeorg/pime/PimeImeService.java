@@ -34,6 +34,7 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
@@ -145,6 +146,37 @@ public final class PimeImeService extends InputMethodService
     private LinearLayout gridBoard;
     private ScrollView gridScroll;
     private boolean candidatesExpanded;
+
+    /* ---- unfolded panel: tabs, syllable rail, handwriting ---- */
+
+    private static final int TAB_FREQUENCY = 0;
+    private static final int TAB_SINGLE = 1;
+    private static final int TAB_HANDWRITING = 2;
+    private static final int RAIL_SYLLABLES = 0;
+    private static final int RAIL_STROKES = 1;
+    private static final int TAB_ROW_HEIGHT_DP = 38;
+    private static final int RAIL_WIDTH_DP = 60;
+    private static final int RAIL_ITEM_HEIGHT_DP = 42;
+    private static final int HANDWRITING_RESULT_HEIGHT_DP = 46;
+
+    private int panelTab = TAB_FREQUENCY;
+    private int railMode = RAIL_SYLLABLES;
+    /** Syllable the table is filtered to; null means every candidate. */
+    private String railSyllable;
+    /** First-stroke bucket the table is filtered to; -1 means no filter. */
+    private int railStroke = -1;
+    private final TextView[] tabViews = new TextView[3];
+    private LinearLayout gridArea;
+    private LinearLayout railList;
+    private ScrollView railScroll;
+    private LinearLayout handwritingArea;
+    private HandwritingView handwritingView;
+    private LinearLayout handwritingBoard;
+    private HorizontalScrollView handwritingScroll;
+    private TextView handwritingUndo;
+    private TextView handwritingClear;
+    private HandwritingRecognizer recognizer;
+    private final List<HandwritingRecognizer.Match> handwritingMatches = new ArrayList<>();
     /**
      * Pages the table shows, {@code gridPages.get(0)} being the chain's first
      * page. Collected with home + pagedown, so a candidate's offset in this
@@ -522,6 +554,50 @@ public final class PimeImeService extends InputMethodService
         panel.setBackgroundColor(palette.board);
         panel.setVisibility(View.GONE);
 
+        /* Category line, the way WeChat separates \u8bcd\u9891 / \u5355\u5b57 / \u624b\u5199\u627e\u5b57:
+         * equal thirds, the active one a soft accent pill. */
+        final LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        tabs.setGravity(Gravity.CENTER_VERTICAL);
+        tabs.setPadding(dp(6), 0, dp(6), 0);
+        tabViews[TAB_FREQUENCY] = panelTabView(R.string.ime_tab_frequency, TAB_FREQUENCY);
+        tabViews[TAB_SINGLE] = panelTabView(R.string.ime_tab_single, TAB_SINGLE);
+        tabViews[TAB_HANDWRITING] = panelTabView(R.string.ime_tab_handwriting,
+                TAB_HANDWRITING);
+        for (TextView tab : tabViews) {
+            tabs.addView(tab, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        }
+        panel.addView(tabs, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(TAB_ROW_HEIGHT_DP)));
+
+        final FrameLayout content = new FrameLayout(this);
+        panel.addView(content, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        /* Table and handwriting share the content rectangle. */
+        gridArea = new LinearLayout(this);
+        gridArea.setOrientation(LinearLayout.HORIZONTAL);
+        content.addView(gridArea, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        /* Left rail: syllables of the candidates' first characters, or the
+         * first-stroke buckets once \u9996\u7b14\u753b is tapped. */
+        railScroll = new ScrollView(this);
+        railScroll.setVerticalScrollBarEnabled(false);
+        railScroll.setBackgroundColor(palette.bar);
+        railList = new LinearLayout(this);
+        railList.setOrientation(LinearLayout.VERTICAL);
+        railScroll.addView(railList, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        gridArea.addView(railScroll, new LinearLayout.LayoutParams(
+                dp(RAIL_WIDTH_DP), ViewGroup.LayoutParams.MATCH_PARENT));
+
+        final View railDivider = new View(this);
+        railDivider.setBackgroundColor(palette.divider);
+        gridArea.addView(railDivider, new LinearLayout.LayoutParams(
+                Math.max(1, dp(1) / 2), ViewGroup.LayoutParams.MATCH_PARENT));
+
         gridScroll = new ScrollView(this);
         gridScroll.setFillViewport(true);
         gridScroll.setVerticalScrollBarEnabled(false);
@@ -530,12 +606,43 @@ public final class PimeImeService extends InputMethodService
         gridBoard.setOrientation(LinearLayout.VERTICAL);
         gridScroll.addView(gridBoard, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        panel.addView(gridScroll, new LinearLayout.LayoutParams(
+        gridArea.addView(gridScroll, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        handwritingArea = new LinearLayout(this);
+        handwritingArea.setOrientation(LinearLayout.VERTICAL);
+        handwritingArea.setVisibility(View.GONE);
+        handwritingView = new HandwritingView(this);
+        handwritingView.setPalette(palette);
+        handwritingView.setListener(this::onInkChanged);
+        handwritingArea.addView(handwritingView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        /* Results are one horizontal row, not a grid: every dp saved here
+         * goes to the writing surface above, which is the scarce resource. */
+        handwritingScroll = new HorizontalScrollView(this);
+        handwritingScroll.setHorizontalScrollBarEnabled(false);
+        handwritingBoard = new LinearLayout(this);
+        handwritingBoard.setOrientation(LinearLayout.HORIZONTAL);
+        handwritingScroll.addView(handwritingBoard, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        handwritingArea.addView(handwritingScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(HANDWRITING_RESULT_HEIGHT_DP)));
+        content.addView(handwritingArea, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         final LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
+        handwritingUndo = barAction(R.string.ime_handwriting_undo, palette,
+                v -> handwritingView.undo());
+        handwritingClear = barAction(R.string.ime_handwriting_clear, palette,
+                v -> handwritingView.clear());
+        handwritingUndo.setVisibility(View.GONE);
+        handwritingClear.setVisibility(View.GONE);
+        bar.addView(handwritingUndo, new LinearLayout.LayoutParams(
+                dp(56), dp(GRID_ROW_HEIGHT_DP)));
+        bar.addView(handwritingClear, new LinearLayout.LayoutParams(
+                dp(56), dp(GRID_ROW_HEIGHT_DP)));
         /* One column of the grid: the delete key lands where the fifth
          * candidate of the next row would be, as in WeChat's table. */
         bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1,
@@ -554,7 +661,96 @@ public final class PimeImeService extends InputMethodService
         bar.addView(delete, new LinearLayout.LayoutParams(0, dp(GRID_ROW_HEIGHT_DP), 1f));
         panel.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_BAR_HEIGHT_DP)));
+        renderTabs(palette);
         return panel;
+    }
+
+    private TextView panelTabView(int label, int tab) {
+        final TextView view = new TextView(this);
+        view.setText(label);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        view.setGravity(Gravity.CENTER);
+        view.setSingleLine(true);
+        view.setOnClickListener(v -> selectPanelTab(tab));
+        return view;
+    }
+
+    private TextView barAction(int label, KeyboardTheme palette,
+                               View.OnClickListener click) {
+        final TextView view = new TextView(this);
+        view.setText(label);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        view.setTextColor(palette.keyFuncText);
+        view.setGravity(Gravity.CENTER);
+        view.setSingleLine(true);
+        final GradientDrawable fill = new GradientDrawable();
+        fill.setCornerRadius(dp(12));
+        fill.setColor(palette.keyFunc);
+        view.setBackground(ripple(fill, palette));
+        view.setOnClickListener(click);
+        return view;
+    }
+
+    /** Paints the category line; the active tab is the only accent pill. */
+    private void renderTabs(KeyboardTheme palette) {
+        final int[] labels = {
+                R.string.ime_tab_frequency,
+                R.string.ime_tab_single,
+                R.string.ime_tab_handwriting,
+        };
+        for (int i = 0; i < tabViews.length; ++i) {
+            final TextView tab = tabViews[i];
+            if (tab == null) continue;
+            final boolean active = panelTab == i;
+            tab.setText(labels[i]);
+            tab.setTextColor(active ? palette.accent : palette.hint);
+            tab.setTypeface(Typeface.create("sans-serif",
+                    active ? Typeface.BOLD : Typeface.NORMAL));
+            final GradientDrawable pill = new GradientDrawable();
+            pill.setCornerRadius(dp(13));
+            pill.setColor(active ? palette.accentSoft : 0);
+            tab.setBackground(ripple(pill, palette));
+            tab.setSelected(active);
+        }
+    }
+
+    private void selectPanelTab(int tab) {
+        if (panelTab == tab) return;
+        panelTab = tab;
+        railMode = RAIL_SYLLABLES;
+        railSyllable = null;
+        railStroke = -1;
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        renderTabs(palette);
+        updatePanelContent();
+        if (tab == TAB_HANDWRITING) {
+            renderHandwritingGrid();
+        } else if (gridPages.isEmpty()) {
+            /* Opened on the handwriting tab last time: the chain's pages were
+             * never collected, so switching back gathers them now. */
+            buildGrid();
+        } else {
+            renderRail(palette);
+            renderGrid();
+        }
+    }
+
+    /** Table or handwriting surface: only the tab decides. */
+    private void updatePanelContent() {
+        final boolean handwriting = panelTab == TAB_HANDWRITING;
+        if (gridArea != null) {
+            gridArea.setVisibility(handwriting ? View.GONE : View.VISIBLE);
+        }
+        if (handwritingArea != null) {
+            handwritingArea.setVisibility(handwriting ? View.VISIBLE : View.GONE);
+        }
+        if (handwritingUndo != null) {
+            handwritingUndo.setVisibility(handwriting ? View.VISIBLE : View.GONE);
+        }
+        if (handwritingClear != null) {
+            handwritingClear.setVisibility(handwriting ? View.VISIBLE : View.GONE);
+        }
     }
 
     /** Host actions from the toolbar; none of them touch the plugin chain. */
@@ -898,13 +1094,14 @@ public final class PimeImeService extends InputMethodService
         renderComposition();
         updateCandidateRow();
         if (!candidates.isEmpty()) onCandidates(candidates.toArray(new String[0]));
-        /* A rebuild always starts from the folded state; when the table was
-         * open it comes back with its collected pages, so re-unfold it instead
-         * of leaving keyboard and panel disagreeing about the rectangle. */
-        if (candidatesExpanded && composition.isEmpty()) candidatesExpanded = false;
+        /* A rebuild starts with fresh views; when the table was open, put its
+         * tabs, rail and rows back instead of leaving keyboard and panel
+         * disagreeing about the rectangle. Ink does not survive a rebuild, so
+         * old handwriting results are dropped with it. */
+        handwritingMatches.clear();
         if (candidatesExpanded) {
             keyboard.setVisibility(View.GONE);
-            renderGrid();
+            renderPanelGrid();
         }
         updateCandidateRow();
     }
@@ -927,6 +1124,14 @@ public final class PimeImeService extends InputMethodService
         secureField = isPassword(attribute.inputType);
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
+        /* A new editor starts folded on 词频, with a clean ink surface. */
+        candidatesExpanded = false;
+        panelTab = TAB_FREQUENCY;
+        railMode = RAIL_SYLLABLES;
+        railSyllable = null;
+        railStroke = -1;
+        handwritingMatches.clear();
+        if (handwritingView != null) handwritingView.clear();
         if (!coreReady) return;
 
         if (!core.hasSession() && !core.openSession()) {
@@ -1327,13 +1532,17 @@ public final class PimeImeService extends InputMethodService
             compositionView.setVisibility(composing ? View.VISIBLE : View.GONE);
         }
         final boolean hasCandidates = !candidates.isEmpty();
-        /* Only a composition has a list worth unfolding: association
-         * candidates come from predict plugins after the format plugin, so they
-         * have no chain indices to pick by. */
-        final boolean expandable = hasCandidates && composing;
-        final boolean unfolded = expandable && candidatesExpanded;
+        /* The chevron also opens the handwriting tab, which works with no
+         * candidate list at all; association-only candidates still justify the
+         * table (they commit by text, without a chain index). */
+        final boolean expandable = composing || hasCandidates;
+        if (candidatesExpanded && !expandable && panelTab != TAB_HANDWRITING) {
+            candidatesExpanded = false;
+        }
+        final boolean unfolded = candidatesExpanded;
         if (expandButton != null) {
-            expandButton.setVisibility(expandable ? View.VISIBLE : View.GONE);
+            expandButton.setVisibility(expandable || unfolded
+                    ? View.VISIBLE : View.GONE);
         }
         if (candidateScroll != null) {
             candidateScroll.setVisibility(
@@ -1345,21 +1554,30 @@ public final class PimeImeService extends InputMethodService
         if (keyboard != null) {
             keyboard.setVisibility(unfolded ? View.GONE : View.VISIBLE);
         }
-        candidateRow.setVisibility(composing || hasCandidates
+        candidateRow.setVisibility(composing || hasCandidates || unfolded
                 ? View.VISIBLE : View.GONE);
     }
 
     /**
      * The whole point of WeChat's chevron: hand the key area to the candidates.
      * The keys are swapped out for a table of every candidate the chain has, so
-     * one screen shows several pages at once and no sideways paging is needed.
+     * one screen shows several pages at once and no sideways paging is needed;
+     * the same rectangle also hosts the tabs and the handwriting surface.
      */
     private void toggleCandidatePanel() {
-        if (candidates.isEmpty()) return;
+        if (!candidatesExpanded && candidates.isEmpty() && composition.isEmpty()) return;
         candidatesExpanded = !candidatesExpanded;
         if (candidatesExpanded) {
             gridReturnPage = chainPage;
-            buildGrid();
+            final KeyboardTheme palette = inputPalette != null
+                    ? inputPalette : KeyboardTheme.of(this);
+            renderTabs(palette);
+            updatePanelContent();
+            if (panelTab == TAB_HANDWRITING) {
+                renderHandwritingGrid();
+            } else {
+                buildGrid();
+            }
         } else {
             foldGrid();
         }
@@ -1380,8 +1598,16 @@ public final class PimeImeService extends InputMethodService
      */
     private void buildGrid() {
         gridPages.clear();
+        if (composition.isEmpty()) {
+            /* Association candidates come from predict plugins after format,
+             * so there is no page cursor to walk: the shown list is the table,
+             * and a tap inserts its text. */
+            if (!candidates.isEmpty()) gridPages.add(new ArrayList<>(candidates));
+            renderPanelGrid();
+            return;
+        }
         if (!coreReady || !core.hasSession()) {
-            renderGrid();
+            renderPanelGrid();
             return;
         }
         collecting = true;
@@ -1404,6 +1630,20 @@ public final class PimeImeService extends InputMethodService
         } finally {
             collecting = false;
         }
+        renderPanelGrid();
+    }
+
+    /** A collected page or an open rail changes the table, never the rail's own shape. */
+    private void renderPanelGrid() {
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        renderTabs(palette);
+        updatePanelContent();
+        if (panelTab == TAB_HANDWRITING) {
+            renderHandwritingGrid();
+            return;
+        }
+        renderRail(palette);
         renderGrid();
     }
 
@@ -1425,23 +1665,191 @@ public final class PimeImeService extends InputMethodService
         candidates.addAll(gridPages.get(target));
     }
 
-    /** Lays the collected pages out five to a row, in chain order. */
+    /** One visible cell and the index that picks it. */
+    private static final class GridEntry {
+        final String text;
+        /** Offset in the collected list = the chain's global candidate index. */
+        final int index;
+
+        GridEntry(String text, int index) {
+            this.text = text;
+            this.index = index;
+        }
+    }
+
+    /**
+     * Candidates of the active category, before the rail narrows them down.
+     *
+     * <p>The index is the offset in the <em>whole</em> collected list, so
+     * filtering never renumbers what {@code core.selectCandidate} takes.
+     */
+    private List<GridEntry> baseEntries() {
+        final List<GridEntry> entries = new ArrayList<>();
+        int index = 0;
+        for (List<String> page : gridPages) {
+            for (String text : page) {
+                final int global = index++;
+                if (panelTab == TAB_SINGLE && !isSingleHanzi(text)) continue;
+                entries.add(new GridEntry(text, global));
+            }
+        }
+        return entries;
+    }
+
+    private List<GridEntry> visibleEntries() {
+        final List<GridEntry> base = baseEntries();
+        if (railSyllable == null && railStroke < 0) return base;
+        final HanziData data = HanziData.get(this);
+        final List<GridEntry> filtered = new ArrayList<>(base.size());
+        for (GridEntry entry : base) {
+            final char first = firstHanzi(entry.text);
+            if (first == 0) continue;
+            if (railSyllable != null) {
+                final String syllable = data.pinyinOf(first);
+                if (!railSyllable.equals(syllable)) continue;
+            }
+            if (railStroke >= 0 && data.firstStroke(first) != railStroke) continue;
+            filtered.add(entry);
+        }
+        return filtered;
+    }
+
+    /** True for exactly one Han character (the 单字 tab's filter). */
+    private static boolean isSingleHanzi(String text) {
+        return text != null && text.codePointCount(0, text.length()) == 1
+                && firstHanzi(text) != 0;
+    }
+
+    /** First character when it is Han, otherwise 0 (nothing to look up). */
+    private static char firstHanzi(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        final char first = text.charAt(0);
+        return Character.UnicodeScript.of(first) == Character.UnicodeScript.HAN
+                ? first : 0;
+    }
+
+    /**
+     * The left rail: syllables of the candidates' first characters (the way
+     * WeChat groups the table), with 首笔画 opening a second-level list. The
+     * rail only narrows what is already collected; it never asks the chain for
+     * a different page.
+     */
+    private void renderRail(KeyboardTheme palette) {
+        if (railList == null) return;
+        railList.removeAllViews();
+        if (railMode == RAIL_STROKES) {
+            addRailItem("‹", false, () -> {
+                railMode = RAIL_SYLLABLES;
+                renderRail(palette);
+            });
+            addRailItem(getString(R.string.ime_rail_all),
+                    railStroke < 0, () -> {
+                        railStroke = -1;
+                        railMode = RAIL_SYLLABLES;
+                        renderRail(palette);
+                        renderGrid();
+                    });
+            final int[] labels = {
+                    R.string.ime_stroke_heng,
+                    R.string.ime_stroke_shu,
+                    R.string.ime_stroke_pie,
+                    R.string.ime_stroke_dian,
+                    R.string.ime_stroke_zhe,
+            };
+            for (int i = 0; i < labels.length; ++i) {
+                final int bucket = i;
+                addRailItem(getString(labels[i]), railStroke == i, () -> {
+                    railStroke = bucket;
+                    railSyllable = null;
+                    renderRail(palette);
+                    renderGrid();
+                });
+            }
+            return;
+        }
+
+        addRailItem(getString(R.string.ime_rail_all),
+                railSyllable == null && railStroke < 0, () -> {
+                    railSyllable = null;
+                    railStroke = -1;
+                    renderRail(palette);
+                    renderGrid();
+                });
+        final HanziData data = HanziData.get(this);
+        final java.util.LinkedHashSet<String> syllables = new java.util.LinkedHashSet<>();
+        for (GridEntry entry : baseEntries()) {
+            final char first = firstHanzi(entry.text);
+            if (first == 0) continue;
+            final String syllable = data.pinyinOf(first);
+            if (syllable != null) syllables.add(syllable);
+        }
+        for (String syllable : syllables) {
+            addRailItem(syllable, syllable.equals(railSyllable), () -> {
+                railSyllable = syllable;
+                railStroke = -1;
+                renderRail(palette);
+                renderGrid();
+            });
+        }
+        addRailItem(getString(R.string.ime_rail_first_stroke) + " ›",
+                railStroke >= 0, () -> {
+                    railMode = RAIL_STROKES;
+                    renderRail(palette);
+                });
+    }
+
+    private void addRailItem(String label, boolean active, Runnable click) {
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        final TextView item = new TextView(this);
+        item.setText(label);
+        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        item.setGravity(Gravity.CENTER);
+        item.setSingleLine(true);
+        item.setEllipsize(TextUtils.TruncateAt.END);
+        item.setTextColor(active ? palette.accent : palette.hint);
+        item.setTypeface(Typeface.create("sans-serif",
+                active ? Typeface.BOLD : Typeface.NORMAL));
+        final GradientDrawable pill = new GradientDrawable();
+        pill.setCornerRadius(dp(10));
+        pill.setColor(active ? palette.accentSoft : 0);
+        item.setBackground(ripple(pill, palette));
+        item.setOnClickListener(v -> click.run());
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(RAIL_ITEM_HEIGHT_DP));
+        params.setMargins(dp(4), dp(2), dp(4), dp(2));
+        railList.addView(item, params);
+    }
+
+    /** Lays the visible candidates out five to a row, in chain order. */
     private void renderGrid() {
         if (gridBoard == null) return;
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
         gridBoard.removeAllViews();
-        final List<String> flat = new ArrayList<>();
-        for (List<String> page : gridPages) flat.addAll(page);
+        final List<GridEntry> entries = visibleEntries();
+        if (entries.isEmpty()) {
+            final TextView empty = new TextView(this);
+            empty.setText(R.string.ime_candidates_empty);
+            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            empty.setTextColor(palette.hint);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(12), dp(16), dp(12), dp(16));
+            gridBoard.addView(empty, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            if (gridScroll != null) gridScroll.scrollTo(0, 0);
+            return;
+        }
         final int columns = CANDIDATE_GRID_COLUMNS;
-        for (int start = 0; start < flat.size(); start += columns) {
+        for (int start = 0; start < entries.size(); start += columns) {
             final LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             for (int column = 0; column < columns; ++column) {
-                final int index = start + column;
-                final View cell = index < flat.size()
-                        ? gridCell(flat.get(index), index, palette) : new View(this);
+                final int at = start + column;
+                final View cell = at < entries.size()
+                        ? gridCell(entries.get(at), at, palette) : new View(this);
                 row.addView(cell, new LinearLayout.LayoutParams(
                         0, dp(GRID_ROW_HEIGHT_DP), 1f));
             }
@@ -1452,10 +1860,10 @@ public final class PimeImeService extends InputMethodService
     }
 
     /** Table cell: same emphasis as the strip's first item, evenly spread. */
-    private View gridCell(String text, int index, KeyboardTheme palette) {
+    private View gridCell(GridEntry entry, int position, KeyboardTheme palette) {
         final TextView item = new TextView(this);
-        final boolean first = index == 0;
-        item.setText(text);
+        final boolean first = position == 0;
+        item.setText(entry.text);
         item.setTextSize(TypedValue.COMPLEX_UNIT_SP, first ? 19 : 18);
         item.setTextColor(first ? palette.accent : palette.candidateText);
         item.setTypeface(Typeface.create("sans-serif",
@@ -1468,8 +1876,16 @@ public final class PimeImeService extends InputMethodService
         pill.setCornerRadius(dp(16));
         pill.setColor(first ? palette.accentSoft : 0);
         item.setBackground(ripple(pill, palette));
-        item.setOnClickListener(v -> selectGridCandidate(index));
+        item.setOnClickListener(v -> pickEntry(entry));
         return item;
+    }
+
+    private void pickEntry(GridEntry entry) {
+        if (composition.isEmpty()) {
+            commitPrediction(entry.index);
+        } else {
+            selectGridCandidate(entry.index);
+        }
     }
 
     /**
@@ -1497,11 +1913,87 @@ public final class PimeImeService extends InputMethodService
         onKey(backspaceKey);
         if (!candidatesExpanded) return;
         if (composition.isEmpty()) {
-            /* Nothing left to unfold: fall back to the keys. */
-            toggleCandidatePanel();
+            /* Nothing left to unfold: fall back to the keys, except while
+             * handwriting, whose surface stays for the next character. */
+            if (panelTab != TAB_HANDWRITING) toggleCandidatePanel();
             return;
         }
         buildGrid();
+    }
+
+    /* ---- handwriting tab ---- */
+
+    private void onInkChanged(List<int[][]> strokes) {
+        handwritingMatches.clear();
+        if (!strokes.isEmpty() && strokes.get(0).length > 0) {
+            if (recognizer == null) {
+                recognizer = new HandwritingRecognizer(HanziData.get(this).templates());
+            }
+            handwritingMatches.addAll(recognizer.lookup(strokes, 20));
+        }
+        renderHandwritingGrid();
+    }
+
+    private void renderHandwritingGrid() {
+        if (handwritingBoard == null) return;
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        handwritingBoard.removeAllViews();
+        for (int at = 0; at < handwritingMatches.size(); ++at) {
+            final char hanzi = handwritingMatches.get(at).hanzi;
+            final TextView item = new TextView(this);
+            item.setText(String.valueOf(hanzi));
+            item.setTextSize(TypedValue.COMPLEX_UNIT_SP, at == 0 ? 20 : 19);
+            item.setTextColor(at == 0 ? palette.accent : palette.candidateText);
+            item.setTypeface(Typeface.create("sans-serif",
+                    at == 0 ? Typeface.BOLD : Typeface.NORMAL));
+            item.setGravity(Gravity.CENTER);
+            item.setSingleLine(true);
+            final GradientDrawable pill = new GradientDrawable();
+            pill.setCornerRadius(dp(16));
+            pill.setColor(at == 0 ? palette.accentSoft : 0);
+            item.setBackground(ripple(pill, palette));
+            item.setOnClickListener(v -> commitHandwriting(hanzi));
+            handwritingBoard.addView(item, new LinearLayout.LayoutParams(
+                    dp(56), ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        if (handwritingScroll != null) handwritingScroll.scrollTo(0, 0);
+    }
+
+    /**
+     * Handwriting is not a formatting candidate: it has no index in the chain,
+     * so the character is inserted directly. A live composition is dropped
+     * first — the drawn character is the user's answer to that preedit.
+     */
+    private void commitHandwriting(char hanzi) {
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        final boolean stayOpen = candidatesExpanded;
+        if (!composition.isEmpty()) {
+            ic.setComposingText("", 1);
+            composition = "";
+            renderComposition();
+            if (coreReady && core.hasSession()) {
+                report(core.reset(), "reset");
+                core.pump();
+            }
+        }
+        ic.commitText(String.valueOf(hanzi), 1);
+        candidates.clear();
+        if (handwritingView != null) handwritingView.clear();
+        if (stayOpen) {
+            /* The chain's reset may have folded the panel; the handwriting
+             * surface stays up for the next character. */
+            candidatesExpanded = true;
+            panelTab = TAB_HANDWRITING;
+            final KeyboardTheme palette = inputPalette != null
+                    ? inputPalette : KeyboardTheme.of(this);
+            renderTabs(palette);
+            updatePanelContent();
+            renderHandwritingGrid();
+            updateCandidateRow();
+        }
+        refreshSurrounding();
     }
 
     /** Folds the table back into the strip, on the page it was showing. */
@@ -1525,7 +2017,9 @@ public final class PimeImeService extends InputMethodService
 
     private void hideCandidates() {
         candidates.clear();
-        candidatesExpanded = false;
+        /* The handwriting surface is not tied to a candidate list: a chain
+         * "hide" while it is up must not fold the tab away. */
+        if (panelTab != TAB_HANDWRITING) candidatesExpanded = false;
         chainPage = 0;
         gridReturnPage = 0;
         gridPages.clear();
