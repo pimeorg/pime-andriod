@@ -32,6 +32,7 @@ pime-android/
 │   ├── chains/default.cbor               默认（中文）链
 │   └── chains/english.cbor               内置英文链
 ├── third_party/wamr/                     WAMR 2.4.1 源码（core 的 WASM 后端）
+├── LICENSE                               Apache License 2.0
 ├── TASK.md / PROGRESS.md
 └── gradlew / gradlew.bat
 ```
@@ -173,6 +174,21 @@ APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
   同一套字形。
   顶栏是工具栏：字母/符号页切换、粘贴、键盘设置、收起；组合串与候选
   共用工具栏下方的一行，没有组合与候选时该行隐藏。
+
+## 许可证
+
+本仓库以 [Apache License 2.0](LICENSE) 授权，版权归 pime 贡献者所有。
+
+随仓库分发的第三方组件保留其原始许可：
+
+| 组件 | 位置 | 许可 |
+|---|---|---|
+| WAMR 2.4.1 | `third_party/wamr/` | Apache 2.0（见 `third_party/wamr/LICENSE`） |
+| sherpa-onnx 运行时 | `app/src/main/jniLibs/` | Apache 2.0 |
+| onnxruntime | `app/src/main/jniLibs/` | MIT |
+
+拼音词表数据另有 CC BY 4.0 署名要求，见 pime-public-plugin 的
+`data/pinyin/SOURCES.md`。
 
 ## 对 pime-core 的改动
 

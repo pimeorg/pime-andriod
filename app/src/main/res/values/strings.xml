@@ -64,7 +64,7 @@
 
     <string name="about_intro">基于 pime-core 的 Android 宿主外壳。外壳只负责宿主：按键、编辑器交互、视图与权限；分词、词典、语言模型、候选与状态机全部由插件提供。</string>
     <string name="about_data">拼音词表基于 rime-wanxiang 生成，数据以 CC BY 4.0 授权，署名见仓库 data/pinyin/SOURCES.md。</string>
-    <string name="about_license">仓库许可证待定。</string>
+    <string name="about_license">本应用以 Apache License 2.0 授权，版权归 pime 贡献者所有。内置的 WAMR、sherpa-onnx 为 Apache 2.0，onnxruntime 为 MIT。</string>
 
     <string name="copy_path">复制路径</string>
     <string name="copied">已复制：%1$s</string>
