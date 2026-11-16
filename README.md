@@ -19,13 +19,16 @@ pime-android/
 │   ├── PimeImeService.java               InputMethodService：core 生命周期与 HAL sink
 │   ├── PimeCore.java                     JNI 封装
 │   ├── KeyboardView.java                 软键盘视图（只上报按键）
-│   ├── ImeToolbar.java                   顶栏工具栏（页切换、粘贴、设置、收起）
+│   ├── ImeToolbar.java                   顶栏工具栏（页切换、粘贴、语音、设置、收起）
+│   ├── VoiceModels.java                  语音模型下载/校验/解包
+│   ├── VoicePermissionActivity.java      申请 RECORD_AUDIO 的透明 Activity
 │   └── SettingsActivity.java             启用/切换输入法与宿主偏好
 ├── app/src/main/cpp/
 │   ├── CMakeLists.txt                    add_subdirectory(pime-core) + vmlib + pime_jni
 │   └── pime_jni.cpp                      C ABI ↔ JNI，无输入逻辑
+├── app/src/main/jniLibs/                 sherpa-onnx / onnxruntime 运行时（arm64-v8a, x86_64）
 ├── app/src/main/assets/
-│   ├── plugins/                          随包发布的 WASM 插件包（20 个）
+│   ├── plugins/                          随包发布的插件包（含原生 pime-speech-sherpa）
 │   ├── chains/default.cbor               默认（中文）链
 │   └── chains/english.cbor               内置英文链
 ├── third_party/wamr/                     WAMR 2.4.1 源码（core 的 WASM 后端）
@@ -73,15 +76,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 首次启动创建，后续可直接推包：
 
 ```
-/data/data/dev.pime.ime/files/
-├── plugins/<id>/manifest.yaml + plugin.wasm|plugin.lua + 资产
+/data/data/com.pimeorg.pime/files/
+├── plugins/<id>/manifest.yaml + plugin.wasm|plugin.lua|plugin.so + 资产
 ├── chains/<name>.cbor           # tools/chainc 生成的链配置；缺失时使用空链
+├── models/asr-stream-small/     # 语音模型 model.int8.onnx + tokens.txt（按需下载）
 └── trust/                       # 信任根
 ```
 
-`assets/plugins/` 与 `assets/chains/` 若存在，会在首次启动时复制到上述目录。
-已存在的目录不会覆盖：更新 APK 里的插件包后需要清除应用数据（或手动替换
-`files/plugins/`）才会生效。
+`assets/plugins/` 与 `assets/chains/` 若存在，会在首次启动时复制到上述目录；
+APK 更新后按包时间戳整包刷新（用户改过的链保持不动）。
 
 装随包分发之外的插件不必再 `adb push`：设置页「插件与链 → 插件包」里有
 「导入插件包」（选一个插件包的 `.zip`，允许带一层顶层目录）与「从文件夹导入」
@@ -100,8 +103,19 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   ART 的 `PROT_NONE` 守卫页内，否则 `wasm_runtime_init` 会崩溃。
 - 插件清单必须包含当前平台标识；x86_64 模拟器对应 `android-x64`。
 - 空链（`{"plugins": []}`）合法：所有按键返回 unhandled，由 Java 层交给编辑器。
-- 顶栏工具栏只做宿主动作：页切换、粘贴剪贴板纯文本、打开设置、收起键盘；
+- 顶栏工具栏只做宿主动作：页切换、粘贴剪贴板纯文本、语音、打开设置、收起键盘；
   粘贴在组合中会先结束组合并清掉候选，避免 `commitText` 顶掉正在输入的内容。
+- 语音输入走独立的「语音代」：平时停在中文/英文代，点麦克风才
+  `activate_generation(语音代)` 并 `pime_core_voice(START)`，停止后切回原代，
+  按键链不受影响。宿主用 `AudioRecord(VOICE_RECOGNITION, 16 kHz, mono, s16le)`
+  采集，PCM 经 `pime_core_audio_in` 进入 core 音频环；插件用
+  `audio.capture` 读取并把识别结果作为 `set_composition`/`commit` 回写。
+  插件是 `runtime: native` 的 `pime-speech-sherpa`，`plugin.so` 从
+  `nativeLibraryDir` 复制到插件包后设为只读。
+- 首次点麦克风若缺模型，`VoiceModels` 从 GitHub release 镜像下载
+  `sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01`
+  （约 25 MB，sha256 校验，bzip2 + tar 只解出模型与词表）；缺
+  `RECORD_AUDIO` 时由透明 Activity 申请，授权后广播回输入服务直接开始录音。
 - 上滑字符只认带副标签的字母键（三行）：竖向位移至少 `max(28dp, 0.55 × 键高)`，
   且大于横向位移的 1.5 倍；不满足时按普通字母处理，快速连打不会把字母变成数字。
 - 「中/英」切换代：启动时构建两代——当前中文链（`files/chains/<活动链>`）与
@@ -123,18 +137,22 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 - Lua 运行时未启用（`PIME_BUILD_LUA=OFF`）：Lua 插件包不能在本 APK 内执行；
   WASM 插件包已可执行。
-- 随包内置 20 个第一方 WASM 包（拼音、拆字、英文、繁简、表情、快捷短语、
-  学习/联想等）与两条链：`default.cbor`（中文，可在设置页增删改）与
+- 随包内置 20 个第一方插件包（19 个 WASM + 1 个原生 `pime-speech-sherpa`）
+  与两条链：`default.cbor`（中文，可在设置页增删改）与
   `english.cbor`（英文，保留名称，不出现在链列表里）。
+- 语音模型不随 APK 分发：首次使用需联网下载（约 25 MB，可走镜像）；APK 因
+  附带 sherpa-onnx/onnxruntime 运行时有约 33 MB。
+- MuMu 12 没有宿主麦克风输入，模拟器上只能验证采集线程与识别器加载；
+  语音识别结果用 debug 回放钩子（`files/voice-test.wav`）验证。
 - 只有 debug 签名；release 签名与混淆未配置。
 - 未在 arm64 物理设备上验证；已在 MuMu 12（Android 15 / API 35 / x86_64）上
-  跑通插件加载、`nihao → 你好` 候选与提交。
+  跑通插件加载、`nihao → 你好` 候选与提交、语音回放预编辑与提交。
 - 软键盘布局为字母/符号两页（字母、数字、Shift、退格、空格、回车、标点）。
   字母页三行都带副标签：首行 `q–p` 为 `1–0`，第二行 `a–l` 为
   `~!@#%“”*?`，第三行 `z–m` 为 `（）-_：；、`；上滑该键键入副标签字符。
   两页底行都有「中/英」键，用于在中英文模式间切换。
-  顶栏是工具栏：字母/符号页切换、粘贴、键盘设置、收起；组合串与候选共用
-  工具栏下方的一行，没有组合与候选时该行隐藏。
+  顶栏是工具栏：字母/符号页切换、粘贴、语音、键盘设置、收起；组合串与候选
+  共用工具栏下方的一行，没有组合与候选时该行隐藏。
 
 ## 对 pime-core 的改动
 

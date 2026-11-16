@@ -24,8 +24,9 @@ import android.widget.LinearLayout;
 final class ImeToolbar extends LinearLayout {
     static final int TOOL_KEYBOARD = 0;
     static final int TOOL_PASTE = 1;
-    static final int TOOL_SETTINGS = 2;
-    static final int TOOL_HIDE = 3;
+    static final int TOOL_VOICE = 2;
+    static final int TOOL_SETTINGS = 3;
+    static final int TOOL_HIDE = 4;
 
     interface Listener {
         void onTool(int tool);
@@ -34,6 +35,7 @@ final class ImeToolbar extends LinearLayout {
     private static final int[] ICONS = {
             R.drawable.ic_keyboard,
             R.drawable.ic_clipboard,
+            R.drawable.ic_mic,
             R.drawable.ic_settings,
             R.drawable.ic_arrow_down,
     };
@@ -41,6 +43,7 @@ final class ImeToolbar extends LinearLayout {
     private static final int[] LABELS = {
             R.string.ime_action_symbols,
             R.string.ime_action_paste,
+            R.string.ime_action_voice,
             R.string.ime_action_settings,
             R.string.ime_action_hide,
     };
@@ -49,6 +52,7 @@ final class ImeToolbar extends LinearLayout {
     private final ImageButton[] buttons = new ImageButton[ICONS.length];
     private Listener listener;
     private boolean symbolsActive;
+    private boolean voiceActive;
 
     ImeToolbar(Context context, KeyboardTheme palette) {
         super(context);
@@ -97,6 +101,17 @@ final class ImeToolbar extends LinearLayout {
                 ? R.string.ime_action_letters : R.string.ime_action_symbols));
     }
 
+    /** Highlights the microphone while a voice turn is open. */
+    void setVoiceActive(boolean active) {
+        voiceActive = active;
+        final ImageButton button = buttons[TOOL_VOICE];
+        button.setImageTintList(ColorStateList.valueOf(
+                active ? palette.accent : palette.hint));
+        button.setContentDescription(getContext().getString(active
+                ? R.string.ime_action_voice_stop : R.string.ime_action_voice));
+        updateCellBackgrounds();
+    }
+
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
@@ -106,8 +121,9 @@ final class ImeToolbar extends LinearLayout {
     private void updateCellBackgrounds() {
         for (int i = 0; i < buttons.length; i++) {
             if (buttons[i] == null) continue;
-            buttons[i].setBackground(cellBackground(
-                    i == TOOL_KEYBOARD && symbolsActive));
+            final boolean active = (i == TOOL_KEYBOARD && symbolsActive)
+                    || (i == TOOL_VOICE && voiceActive);
+            buttons[i].setBackground(cellBackground(active));
         }
     }
 

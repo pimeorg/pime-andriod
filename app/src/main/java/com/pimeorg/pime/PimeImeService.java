@@ -1,5 +1,6 @@
 package com.pimeorg.pime;
 
+import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -9,6 +10,13 @@ import android.content.res.AssetManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Typeface;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.widget.Toast;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -32,12 +40,15 @@ import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Android host for pime-core.
@@ -60,8 +71,15 @@ public final class PimeImeService extends InputMethodService
     /** Union of the capabilities declared by the bundled chain plugins. */
     private static final String[] CHAIN_CAPABILITIES = {
             "input.read", "workspace", "output.emit", "asset.read",
-            "store.kv", "time", "context.read", "surrounding.read"
+            "store.kv", "time", "context.read", "surrounding.read",
+            "audio.capture", "audio.pcm", "log"
     };
+
+    /** Native speech plugin bundled with the shell (see assets/plugins). */
+    private static final String SPEECH_PLUGIN_ID = "pime-speech-sherpa";
+    private static final String SPEECH_PLUGIN_LIB = "libpime_speech_sherpa.so";
+    private static final String VOICE_MODEL = "asr-stream-small";
+    private static final int REQUEST_RECORD_AUDIO = 81;
 
     /** Local action: the settings page edited a chain and wants the kernel rebuilt. */
     public static final String ACTION_REBUILD_CHAIN = "com.pimeorg.pime.action.REBUILD_CHAIN";
@@ -69,6 +87,8 @@ public final class PimeImeService extends InputMethodService
     public static final String ACTION_RELOAD_PLUGINS = "com.pimeorg.pime.action.RELOAD_PLUGINS";
     /** Local action: display preferences changed; rebuild the input view. */
     public static final String ACTION_DISPLAY_CHANGED = "com.pimeorg.pime.action.DISPLAY_CHANGED";
+    /** Local action: the user just granted the microphone permission. */
+    public static final String ACTION_VOICE_READY = "com.pimeorg.pime.action.VOICE_READY";
 
     private static final int TOP_BAR_HEIGHT_DP = 44;
     private static final int CANDIDATE_ROW_HEIGHT_DP = 48;
@@ -114,6 +134,16 @@ public final class PimeImeService extends InputMethodService
     private long chineseGeneration;
     private long englishGeneration;
     private long activeGeneration;
+
+    /** Generation with only the native speech plugin, used while listening. */
+    private long speechGeneration;
+    private boolean voiceActive;
+    /** True while the capture thread should keep reading the microphone. */
+    private volatile boolean voiceCapturing;
+    private boolean voiceReplay;
+    private AudioRecord voiceRecord;
+    private Thread voiceThread;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     public void onCreate() {
@@ -165,11 +195,56 @@ public final class PimeImeService extends InputMethodService
         chineseGeneration = buildChain(ChainStore.activeChain(this), true);
         englishGeneration = buildChain(
                 new File(ChainStore.chainsDir(this), ENGLISH_CHAIN), false);
+        final long oldSpeech = speechGeneration;
+        speechGeneration = buildSpeechGeneration();
         activeGeneration = 0;
         activateForLanguage(Prefs.english(this));
 
         retireGeneration(oldChinese);
         retireGeneration(oldEnglish);
+        retireGeneration(oldSpeech);
+    }
+
+    /** Directory the voice model is downloaded into. */
+    private File voiceModelDir() {
+        return new File(new File(getFilesDir(), "models"), VOICE_MODEL);
+    }
+
+    /**
+     * Builds the one-plugin generation used while the microphone is open. The
+     * plugin does not live in the typing chains: every key stays on the normal
+     * path, and the host only activates this generation around a voice turn.
+     */
+    private long buildSpeechGeneration() {
+        if (!coreReady) return 0;
+        final File modelDir = voiceModelDir();
+        final Map<String, Object> settings = new LinkedHashMap<>();
+        settings.put("runtime_dir", getApplicationInfo().nativeLibraryDir);
+        settings.put("model_dir", modelDir.getAbsolutePath());
+        if (BuildConfig.DEBUG) {
+            /* Debug-only replay hook: drop a 16 kHz mono wav into the app's
+             * files directory to exercise recognition without a microphone. */
+            final File testWav = new File(getFilesDir(), "voice-test.wav");
+            if (testWav.isFile()) {
+                settings.put("wav_file", testWav.getAbsolutePath());
+                Log.i(TAG, "voice: replaying " + testWav);
+            }
+        }
+
+        final Map<String, Object> plugin = new LinkedHashMap<>();
+        plugin.put("id", SPEECH_PLUGIN_ID);
+        plugin.put("role", "recognize");
+        plugin.put("settings", settings);
+
+        final List<Object> plugins = new ArrayList<>();
+        plugins.add(plugin);
+        final Map<String, Object> root = new LinkedHashMap<>();
+        root.put("plugins", plugins);
+
+        final long built = core.buildGeneration(Cbor.write(root));
+        if (built == 0) Log.w(TAG, "speech generation not buildable");
+        else Log.i(TAG, "speech generation built");
+        return built;
     }
 
     /**
@@ -223,6 +298,10 @@ public final class PimeImeService extends InputMethodService
                     refreshInputView();
                     return;
                 }
+                if (ACTION_VOICE_READY.equals(intent.getAction())) {
+                    toggleVoice();
+                    return;
+                }
                 // A newly installed package has to be loaded before the chain
                 // that references it can be built.
                 if (ACTION_RELOAD_PLUGINS.equals(intent.getAction())) {
@@ -234,6 +313,7 @@ public final class PimeImeService extends InputMethodService
         final IntentFilter filter = new IntentFilter(ACTION_REBUILD_CHAIN);
         filter.addAction(ACTION_RELOAD_PLUGINS);
         filter.addAction(ACTION_DISPLAY_CHANGED);
+        filter.addAction(ACTION_VOICE_READY);
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             registerReceiver(rebuildReceiver, filter,
                     Context.RECEIVER_NOT_EXPORTED);
@@ -244,6 +324,7 @@ public final class PimeImeService extends InputMethodService
 
     @Override
     public void onDestroy() {
+        cancelVoice();
         if (rebuildReceiver != null) {
             unregisterReceiver(rebuildReceiver);
             rebuildReceiver = null;
@@ -361,9 +442,204 @@ public final class PimeImeService extends InputMethodService
             case ImeToolbar.TOOL_HIDE:
                 requestHideSelf(0);
                 break;
+            case ImeToolbar.TOOL_VOICE:
+                toggleVoice();
+                break;
             default:
                 break;
         }
+    }
+
+    /* ------------------------------------------------------------- voice */
+
+    /**
+     * Mic tap: first starts listening, a second tap finalizes the utterance.
+     * Recognition runs in the bundled native plugin; the host only owns the
+     * permission, the AudioRecord and the generation switch.
+     */
+    private void toggleVoice() {
+        if (!coreReady) return;
+        if (voiceActive) {
+            stopVoice();
+            return;
+        }
+        if (secureField) {
+            Toast.makeText(this, R.string.voice_unavailable_secure,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            final Intent intent = new Intent(this, VoicePermissionActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            return;
+        }
+        if (speechGeneration == 0) {
+            Toast.makeText(this, R.string.voice_unavailable_plugin,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!VoiceModels.isReady(this)) {
+            Toast.makeText(this, R.string.voice_download_needed,
+                    Toast.LENGTH_SHORT).show();
+            VoiceModels.ensure(this, this::startVoice,
+                    () -> toast(R.string.voice_download_failed));
+            return;
+        }
+        startVoice();
+    }
+
+    private void startVoice() {
+        if (voiceActive || !coreReady) return;
+        /* Reached from the download callback too: the keyboard may be gone by
+         * then, and opening the microphone without a visible field is wrong. */
+        if (!isInputViewShown()) return;
+        if (activeGeneration != speechGeneration) {
+            if (core.activateGeneration(speechGeneration) != 0) {
+                Toast.makeText(this, R.string.voice_unavailable_plugin,
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            activeGeneration = speechGeneration;
+        }
+        report(core.reset(), "reset");
+        final int status = core.voice(PimeCore.VOICE_START);
+        core.pump();
+        if (status != 0) {
+            Log.w(TAG, "voice start: " + text(status));
+            toast(R.string.voice_unavailable_plugin);
+            restoreLanguageGeneration();
+            return;
+        }
+        /* The debug replay hook feeds the plugin from a wav, so leaving the
+         * microphone closed keeps the capture ring out of the picture. */
+        voiceReplay = BuildConfig.DEBUG
+                && new File(getFilesDir(), "voice-test.wav").isFile();
+        if (!voiceReplay && !startCapture()) {
+            core.voice(PimeCore.VOICE_CANCEL);
+            core.pump();
+            restoreLanguageGeneration();
+            toast(R.string.voice_unavailable_mic);
+            return;
+        }
+        voiceActive = true;
+        if (toolbar != null) toolbar.setVoiceActive(true);
+    }
+
+    private void stopVoice() {
+        stopCapture();
+        if (coreReady) {
+            report(core.voice(PimeCore.VOICE_STOP), "voice stop");
+            core.pump();
+        }
+        voiceActive = false;
+        if (toolbar != null) toolbar.setVoiceActive(false);
+        restoreLanguageGeneration();
+    }
+
+    private void cancelVoice() {
+        if (!voiceActive) return;
+        stopCapture();
+        if (coreReady) {
+            report(core.voice(PimeCore.VOICE_CANCEL), "voice cancel");
+            core.pump();
+        }
+        voiceActive = false;
+        if (toolbar != null) toolbar.setVoiceActive(false);
+        restoreLanguageGeneration();
+    }
+
+    /** Returns to the generation for the current 中/英 side. */
+    private void restoreLanguageGeneration() {
+        if (!coreReady) return;
+        final long target = Prefs.english(this) ? englishGeneration : chineseGeneration;
+        if (target != 0 && core.activateGeneration(target) == 0) {
+            activeGeneration = target;
+        }
+    }
+
+    /** Opens the 16 kHz mono microphone and feeds PCM into the core ring. */
+    private boolean startCapture() {
+        final int minimum = AudioRecord.getMinBufferSize(16000,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        if (minimum <= 0) return false;
+        final int buffer = Math.max(minimum * 2, 32000);
+        try {
+            voiceRecord = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    16000, AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT, buffer);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "AudioRecord unavailable", error);
+            voiceRecord = null;
+            return false;
+        }
+        if (voiceRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+            voiceRecord.release();
+            voiceRecord = null;
+            return false;
+        }
+        voiceCapturing = true;
+        final AudioRecord record = voiceRecord;
+        voiceRecord.startRecording();
+        voiceThread = new Thread(() -> {
+            final byte[] pcm = new byte[3200]; /* 100 ms */
+            final long started = SystemClock.elapsedRealtime();
+            int reads = 0;
+            int failures = 0;
+            while (voiceCapturing) {
+                final int read = record.read(pcm, 0, pcm.length);
+                if (read > 0) {
+                    if (reads++ == 0) {
+                        Log.i(TAG, "voice: capture running");
+                    }
+                    if (coreReady) {
+                        final int status = core.audioIn(pcm, read,
+                                SystemClock.elapsedRealtime() - started);
+                        if (status != 0 && failures++ < 3) {
+                            Log.w(TAG, "voice: audio in " + text(status));
+                        }
+                    }
+                } else if (read < 0 && failures++ < 3) {
+                    Log.w(TAG, "voice: read " + read);
+                }
+            }
+        }, "pime-voice");
+        voiceThread.start();
+        return true;
+    }
+
+    private void stopCapture() {
+        voiceCapturing = false;
+        if (voiceRecord != null) {
+            try {
+                voiceRecord.stop();
+            } catch (IllegalStateException ignored) {
+                /* Already stopped. */
+            }
+            voiceRecord.release();
+            voiceRecord = null;
+        }
+        if (voiceThread != null) {
+            try {
+                voiceThread.join(500);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            voiceThread = null;
+        }
+    }
+
+    private void toast(int resource) {
+        Toast.makeText(this, resource, Toast.LENGTH_SHORT).show();
+    }
+
+    /** Plugin threads call this through the sink; pump must run on the owner. */
+    @Override
+    public void onWake() {
+        mainHandler.post(() -> {
+            if (coreReady) core.pump();
+        });
     }
 
     @Override
@@ -487,6 +763,7 @@ public final class PimeImeService extends InputMethodService
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        cancelVoice();
         composition = "";
         secureField = isPassword(attribute.inputType);
         if (compositionView != null) compositionView.setText("");
@@ -506,7 +783,8 @@ public final class PimeImeService extends InputMethodService
                 ? "" : attribute.packageName;
         final boolean password = isPassword(attribute.inputType);
         final int hostCaps = PimeCore.HOST_CANDIDATES | PimeCore.HOST_TOUCH
-                | PimeCore.HOST_SECURE | PimeCore.HOST_SURROUNDING;
+                | PimeCore.HOST_SECURE | PimeCore.HOST_SURROUNDING
+                | PimeCore.HOST_AUDIO_CAPTURE;
         report(core.context(app, fieldType(attribute.inputType),
                 PimeCore.INPUT_KEYBOARD, "zh_CN", 20, hostCaps), "context");
         report(core.secure(password), "secure");
@@ -527,6 +805,7 @@ public final class PimeImeService extends InputMethodService
 
     @Override
     public void onFinishInput() {
+        cancelVoice();
         if (coreReady) {
             report(core.focus(false), "focus");
             report(core.reset(), "reset");
@@ -913,6 +1192,20 @@ public final class PimeImeService extends InputMethodService
                 Log.w(TAG, "plugin " + entry.getName() + ": " + text(status));
             }
         }
+        makeNativeEntryReadOnly(pluginDir);
+    }
+
+    /** Core's installed copy is what gets dlopen'ed; mark it non-writable. */
+    private void makeNativeEntryReadOnly(File pluginDir) {
+        final File idDir = new File(pluginDir, SPEECH_PLUGIN_ID);
+        final File[] versions = idDir.listFiles();
+        if (versions == null) return;
+        for (File version : versions) {
+            final File entry = new File(version, "plugin.so");
+            if (entry.isFile() && entry.canWrite() && !entry.setReadOnly()) {
+                Log.w(TAG, "cannot make " + entry + " read-only");
+            }
+        }
     }
 
     /**
@@ -933,12 +1226,16 @@ public final class PimeImeService extends InputMethodService
         try {
             for (String name : assets.list("plugins")) {
                 final File target = new File(pluginDir, name);
-                if (target.exists() && !refresh) continue;
+                if (target.exists() && !refresh) {
+                    ensureNativeEntry(target);
+                    continue;
+                }
                 if (target.exists()) {
                     PluginStore.deleteTree(target);
                     removeInstalledCopy(pluginDir, "plugins/" + name);
                 }
                 copyAssetTree("plugins/" + name, target);
+                ensureNativeEntry(target);
             }
             syncBundledChains(chainDir, refresh);
         } catch (IOException error) {
@@ -979,6 +1276,44 @@ public final class PimeImeService extends InputMethodService
             copyAssetTree("chains/" + name, target);
             Prefs.setChainBaseline(this, name, bundledHash);
         }
+    }
+
+    /**
+     * The speech plugin's binary is built into the APK, not shipped in
+     * assets; copy the ABI-correct library next to its manifest and make it
+     * read-only (Android 10+ refuses to dlopen writable code from the app's
+     * home directory).
+     */
+    private void ensureNativeEntry(File packageDir) throws IOException {
+        final File manifest = new File(packageDir, "manifest.yaml");
+        if (!manifest.isFile()) return;
+        final byte[] bytes = readBytes(manifest);
+        if (bytes == null) return;
+        final String text = new String(bytes, "UTF-8");
+        if (!text.contains("runtime: native")) return;
+        final File entry = new File(packageDir, "plugin.so");
+        if (entry.isFile()) {
+            entry.setReadOnly();
+            return;
+        }
+        final File library = new File(getApplicationInfo().nativeLibraryDir,
+                SPEECH_PLUGIN_LIB);
+        if (!library.isFile()) {
+            Log.w(TAG, "native plugin library missing: " + library);
+            return;
+        }
+        try (InputStream input = new FileInputStream(library)) {
+            writeFile(entry, readAll(input));
+        }
+        if (!entry.setReadOnly()) Log.w(TAG, "cannot make " + entry + " read-only");
+    }
+
+    private static byte[] readAll(InputStream input) throws IOException {
+        final ByteArrayOutputStream output = new ByteArrayOutputStream();
+        final byte[] buffer = new byte[65536];
+        int read;
+        while ((read = input.read(buffer)) > 0) output.write(buffer, 0, read);
+        return output.toByteArray();
     }
 
     private static String sha256(byte[] data) {

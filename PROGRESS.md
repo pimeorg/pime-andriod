@@ -957,3 +957,56 @@ translate 插件就失败：按 `a` 时 logcat 是 `key 97: NOT_FOUND`，字段�
 - MuMu 12（Android 15 / x86_64）：`nih` → 你好 / 你会 / 年后 / 你还 / 您好，
   无英文候选；`goo` 仍是 goo/good/goods/够/工；`nihao` → 你好；
   英文链 `hel` → hel/help/held/helped/hell。
+
+## 语音输入：原生 sherpa-onnx 插件（2026-11-16）
+
+WeaveText 的离线 ASR 之前只有 WASM 占位插件，pime 也没有宿主音频路径。现在
+把它做成可信原生插件，宿主只负责权限、采集和链路切换。
+
+### 插件（pime-public-plugin/plugins/recognize/pime-speech-sherpa）
+
+- `runtime: native`、`trusted: true`、`role: recognize`；能力
+  `audio.capture / audio.pcm / asset.read / log`，平台
+  `android-arm64 / android-x64 / windows-x64`。
+- `voice { action: 0 start | 1 stop | 2 cancel }`：`start` 时才 `dlopen`
+  `libonnxruntime.so` / `libsherpa-onnx-c-api.so` 并创建 streaming
+  recognizer；工作线程用 `audio.capture` 的 `start/read/stop` 取 100 ms
+  16 kHz mono s16le PCM，`accept_waveform` + 解码，增量结果用
+  `host.emit(set_composition)` 回写。端点（2.4 s / 1.2 s / 20 s）切句后
+  已定文字累积到本轮文本。`stop` 补尾音并返回 `commit`，`cancel` 丢弃。
+- 模型/运行时由宿主提供（`model_dir` / `runtime_dir` 设置）；插件不联网。
+- 开发回放：`wav_file` 设置可用 16 kHz wav 代替麦克风；Android 宿主只在
+  debug 构建、且 `files/voice-test.wav` 存在时传入。
+- `tools/check_plugins` 的沙箱禁用词（`dlopen` / `windows.h` 等）改为只检查
+  wasm：native 插件本就是可信逃生舱。README / CHANGELOG / 用例补齐，
+  `check_plugins` 0 error。
+
+### 宿主（pime-android）
+
+- 新增 `pime_core_voice(session, PIME_VOICE_START/STOP/CANCEL)`：
+  core 把 `voice` 事件派发到当前代；语音代是独立的一条链，只含
+  speech 插件，录音期间切过去，结束切回中文/英文代，按键路径不受影响。
+- JNI：`nativeVoice`、`nativeAudioIn`（构造 `pime_audio_frame` 推进 core
+  音频环）、`onNativeWake`（插件线程请求 owner 线程 `pump`）和
+  `onNativeLog`（core/插件日志进 logcat）。debug 构建 core 日志级别为
+  DEBUG，秒级打印采集电平。
+- `PimeImeService`：工具栏麦克风；`RECORD_AUDIO` 缺失时启动透明
+  `VoicePermissionActivity`，授权后广播回到 IME 并直接开录；
+  `VoiceModels` 在首次使用时就近下载模型（镜像 + sha256 + bzip2/tar）。
+- 插件 `.so` 从 `nativeLibraryDir` 复制到插件包并 `setReadOnly()`，
+  满足 Android 10+ 对 `dlopen` 可执行代码的要求。
+
+### 验证（MuMu 12 / Android 15 / x86_64）
+
+- 插件包加载、代构建设置 `runtime_dir/model_dir` 生效、识别器就绪。
+- 采集：`AudioRecord(VOICE_RECOGNITION, 16000, MONO, PCM_16BIT)` 启动，
+  `pime_core_audio_in` 持续返回 OK，插件 `audio.capture read` 拿到
+  3200 字节/帧；MuMu 无宿主麦克风时电平为 0，无候选，属预期。
+- 回放 `0.wav`：预编辑实时输出「对我做了介绍那么我想说的是呢大家如果」，
+  麦克风按钮高亮，停止后提交 81 字，代切回中文，键盘继续可输入。
+- 按需下载：删掉模型目录后点麦克风，直连 GitHub 15 s 超时，自动改用
+  `ghproxy.net` 镜像（约 1 分钟下完 21,264,113 字节），sha256 通过后
+  bzip2/tar 只解出 `model.int8.onnx`（26,342,340）与 `tokens.txt`（13,366），
+  缓存归档删除；完成回调直接开录，`recognizer ready` → `listening` →
+  采集线程运行，停止后 0 字提交。模型就绪后再点麦克风不再下载。
+- 注意：验证时临时禁用了 Sogou/百度输入法（它们会抢回默认），结束后恢复。

@@ -31,6 +31,8 @@ jmethodID g_mid_candidates = nullptr;
 jmethodID g_mid_hide = nullptr;
 jmethodID g_mid_beep = nullptr;
 jmethodID g_mid_notify = nullptr;
+jmethodID g_mid_wake = nullptr;
+jmethodID g_mid_log = nullptr;
 
 class Env {
 public:
@@ -306,6 +308,29 @@ pime_status sink_notify(void*, pime_status code) {
     return clear_exception(env.get()) ? PIME_INVALID : PIME_OK;
 }
 
+/* Called from plugin audio threads: only asks the Java owner thread to pump. */
+void sink_wake(void*) {
+    Env env;
+    if (!env.get() || !g_bridge || !g_mid_wake) return;
+    env->CallVoidMethod(g_bridge, g_mid_wake);
+    clear_exception(env.get());
+}
+
+void sink_log(void*, const pime_log_record* record) {
+    Env env;
+    if (!env.get() || !g_bridge || !g_mid_log || !record) return;
+    JNIEnv* jni = env.get();
+    jstring tag = to_jstring(jni, record->tag, record->tag_len);
+    jstring message = to_jstring(jni, record->msg, record->msg_len);
+    if (tag && message) {
+        jni->CallVoidMethod(g_bridge, g_mid_log,
+                            static_cast<jint>(record->level), tag, message);
+    }
+    if (tag) jni->DeleteLocalRef(tag);
+    if (message) jni->DeleteLocalRef(message);
+    clear_exception(jni);
+}
+
 void release_globals(JNIEnv* env) {
     if (g_bridge_class) {
         env->DeleteGlobalRef(g_bridge_class);
@@ -321,6 +346,8 @@ void release_globals(JNIEnv* env) {
     g_mid_hide = nullptr;
     g_mid_beep = nullptr;
     g_mid_notify = nullptr;
+    g_mid_wake = nullptr;
+    g_mid_log = nullptr;
 }
 
 pime_session* session_of(jlong handle) {
@@ -366,8 +393,12 @@ Java_com_pimeorg_pime_PimeCore_nativeStart(JNIEnv* env, jobject thiz,
     g_mid_hide = env->GetMethodID(g_bridge_class, "onNativeHideCandidates", "()V");
     g_mid_beep = env->GetMethodID(g_bridge_class, "onNativeBeep", "()V");
     g_mid_notify = env->GetMethodID(g_bridge_class, "onNativeNotify", "(I)V");
+    g_mid_wake = env->GetMethodID(g_bridge_class, "onNativeWake", "()V");
+    g_mid_log = env->GetMethodID(g_bridge_class, "onNativeLog",
+                                 "(ILjava/lang/String;Ljava/lang/String;)V");
     if (clear_exception(env) || !g_mid_composition || !g_mid_commit ||
-        !g_mid_candidates || !g_mid_hide || !g_mid_beep || !g_mid_notify) {
+        !g_mid_candidates || !g_mid_hide || !g_mid_beep || !g_mid_notify ||
+        !g_mid_wake || !g_mid_log) {
         release_globals(env);
         return 0;
     }
@@ -381,6 +412,8 @@ Java_com_pimeorg_pime_PimeCore_nativeStart(JNIEnv* env, jobject thiz,
     sink.hide_candidates = &sink_hide;
     sink.beep = &sink_beep;
     sink.notify = &sink_notify;
+    sink.on_log = &sink_log;
+    sink.wake = &sink_wake;
 
     pime_core_config config{};
     config.size = sizeof(pime_core_config);
@@ -391,7 +424,12 @@ Java_com_pimeorg_pime_PimeCore_nativeStart(JNIEnv* env, jobject thiz,
     config.data_dir_len = static_cast<uint32_t>(data_path.size());
     config.trust_store = trust_path.data();
     config.trust_store_len = static_cast<uint32_t>(trust_path.size());
+#ifdef NDEBUG
     config.log_level = PIME_LOG_INFO;
+#else
+    /* Debug builds keep plugin diagnostics (audio levels, recognizer state). */
+    config.log_level = PIME_LOG_DEBUG;
+#endif
     config.flags = static_cast<uint32_t>(flags);
     config.memory_budget_mb = 64;
 
@@ -572,6 +610,39 @@ Java_com_pimeorg_pime_PimeCore_nativeReset(JNIEnv*, jobject, jlong session) {
     pime_session* value = session_of(session);
     if (!value) return PIME_INVALID;
     return static_cast<jint>(pime_core_reset(value));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_pimeorg_pime_PimeCore_nativeVoice(JNIEnv*, jobject, jlong session,
+                                           jint action) {
+    pime_session* value = session_of(session);
+    if (!value) return PIME_INVALID;
+    return static_cast<jint>(
+            pime_core_voice(value, static_cast<uint32_t>(action)));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_pimeorg_pime_PimeCore_nativeAudioIn(JNIEnv* env, jobject,
+                                             jlong session, jbyteArray data,
+                                             jint len, jlong time_ms) {
+    pime_session* value = session_of(session);
+    if (!value || !data || len <= 0) return PIME_INVALID;
+    const jsize size = env->GetArrayLength(data);
+    if (len > size) len = size;
+    jbyte* bytes = env->GetByteArrayElements(data, nullptr);
+    if (!bytes) return PIME_INVALID;
+    pime_audio_frame frame{};
+    frame.size = sizeof(frame);
+    frame.version = PIME_ABI_MAJOR;
+    frame.rate = 16000;
+    frame.channels = 1;
+    frame.format = PIME_AUDIO_S16LE;
+    frame.data = bytes;
+    frame.data_len = static_cast<uint32_t>(len);
+    frame.time_ms = static_cast<uint64_t>(time_ms);
+    const pime_status status = pime_core_audio_in(value, &frame);
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    return static_cast<jint>(status);
 }
 
 JNIEXPORT jint JNICALL

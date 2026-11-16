@@ -144,3 +144,17 @@
       有组合时数字选词不变；default 链恢复为 19 个插件
 - [x] 修复中文输入 `nih` 候选栏混入英文拼写建议：中文链只做前缀补全，
       英文无实际新增时保持中文视图；MuMu 实测 `nih`/`goo`/`nihao`/英文 `hel`
+- [x] 语音输入：内置 `pime-speech-sherpa` 原生插件（sherpa-onnx 流式
+      Zipformer2-CTC）+ 工具栏麦克风；`RECORD_AUDIO`、`AudioRecord` 采集
+      16 kHz PCM 经 core 音频环送插件，边说边预编辑、停止整句提交
+- [x] 语音模型按需下载（GitHub release 镜像 + sha256 校验 + bzip2/tar 解包），
+      首次点麦克风提示下载；权限由透明 `VoicePermissionActivity` 申请
+- [x] MuMu 实测（模型已就位）：插件加载、识别器就绪、采集线程运行；
+      用 `voice-test.wav` 开发回放验证 `0.wav` → 「对我做了介绍…」预编辑，
+      停止后 81 字提交成功
+- [x] MuMu 实测按需下载：删掉 `files/models/asr-stream-small` 后点麦克风，
+      直连 GitHub 超时后自动走 ghproxy 镜像，21 MB 归档下载 + sha256 校验
+      通过、只解出 `model.int8.onnx` 与 `tokens.txt`，缓存归档删除；下载完成
+      回调直接开录（`recognizer ready` / `listening` / 采集线程运行），
+      停止后 0 字提交并切回中文代；再次点麦克风不再下载
+- [ ] 物理设备麦克风实测（MuMu 无宿主麦克风输入）

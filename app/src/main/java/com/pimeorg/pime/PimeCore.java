@@ -1,5 +1,7 @@
 package com.pimeorg.pime;
 
+import android.util.Log;
+
 /**
  * Thin JNI face of pime-core. Holds no input-method logic: it forwards host
  * events into the kernel and the kernel's sink commands back to a listener.
@@ -42,8 +44,14 @@ public final class PimeCore {
     /* host capabilities */
     public static final int HOST_SURROUNDING = 1;
     public static final int HOST_SECURE = 1 << 1;
+    public static final int HOST_AUDIO_CAPTURE = 1 << 2;
     public static final int HOST_CANDIDATES = 1 << 4;
     public static final int HOST_TOUCH = 1 << 5;
+
+    /* voice actions */
+    public static final int VOICE_START = 0;
+    public static final int VOICE_STOP = 1;
+    public static final int VOICE_CANCEL = 2;
 
     public interface Listener {
         /**
@@ -62,6 +70,10 @@ public final class PimeCore {
         void onBeep();
 
         void onNotify(int code);
+
+        /** Called from a plugin thread: post {@link #pump()} to the owner thread. */
+        default void onWake() {
+        }
     }
 
     private long core;
@@ -206,6 +218,21 @@ public final class PimeCore {
         return nativeReset(session);
     }
 
+    /** Tells the active chain's recognize plugins to start, stop or cancel voice input. */
+    public int voice(int action) {
+        if (session == 0) return -1;
+        return nativeVoice(session, action);
+    }
+
+    /**
+     * Feeds one chunk of 16 kHz mono s16le PCM captured by the host. Safe to
+     * call from the audio thread; the core writes it into its capture ring.
+     */
+    public int audioIn(byte[] pcm, int length, long timeMs) {
+        if (session == 0) return -1;
+        return nativeAudioIn(session, pcm, length, timeMs);
+    }
+
     /**
      * Reports the text around the cursor. Predict/association plugins prefer
      * it over their own last-committed-word state, so the host must send it
@@ -255,6 +282,33 @@ public final class PimeCore {
         if (listener != null) listener.onNotify(code);
     }
 
+    /* Called from a plugin thread. The listener must post pump() to the
+     * owner thread; core input calls are not thread-safe. */
+    private void onNativeWake() {
+        if (listener != null) listener.onWake();
+    }
+
+    /* Core and plugin log records, already level-filtered by core. */
+    private void onNativeLog(int level, String tag, String message) {
+        switch (level) {
+            case 0: /* PIME_LOG_ERROR */
+                Log.e(tag, message);
+                break;
+            case 1: /* PIME_LOG_WARN */
+                Log.w(tag, message);
+                break;
+            case 3: /* PIME_LOG_DEBUG */
+                Log.d(tag, message);
+                break;
+            case 4: /* PIME_LOG_TRACE */
+                Log.v(tag, message);
+                break;
+            default:
+                Log.i(tag, message);
+                break;
+        }
+    }
+
     private native long nativeStart(String pluginDir, String dataDir,
                                     String trustDir, int flags);
 
@@ -291,6 +345,11 @@ public final class PimeCore {
     private native int nativeSecure(long session, boolean secure);
 
     private native int nativeReset(long session);
+
+    private native int nativeVoice(long session, int action);
+
+    private native int nativeAudioIn(long session, byte[] pcm, int length,
+                                     long timeMs);
 
     private native int nativeSurrounding(long session, String before,
                                          String after);

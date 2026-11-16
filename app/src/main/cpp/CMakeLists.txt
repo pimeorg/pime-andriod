@@ -69,6 +69,18 @@ set(CMAKE_SKIP_INSTALL_RULES ON)
 
 add_subdirectory("${PIME_CORE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/pime-core")
 
+# Native speech plugin. The host copies the built library into the plugin
+# package at first run (core loads `<package>/plugin.so`). Trusted native
+# plugins are an explicit opt-in in pime's plugin repository.
+option(PIME_BUILD_TRUSTED_NATIVE "Build trusted native plugins" ON)
+set(PIME_SPEECH_PLUGIN_DIR "" CACHE PATH "pime-speech-sherpa plugin source")
+if(PIME_BUILD_TRUSTED_NATIVE AND PIME_SPEECH_PLUGIN_DIR
+   AND EXISTS "${PIME_SPEECH_PLUGIN_DIR}/CMakeLists.txt")
+    add_subdirectory("${PIME_SPEECH_PLUGIN_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/speech-plugin")
+else()
+    message(WARNING "pime-speech-sherpa not found; voice input will be unavailable")
+endif()
+
 add_library(pime_jni SHARED pime_jni.cpp)
 target_include_directories(pime_jni PRIVATE "${PIME_CORE_DIR}/include")
 target_link_libraries(pime_jni PRIVATE pime_core android log)
