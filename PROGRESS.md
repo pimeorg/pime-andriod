@@ -900,3 +900,31 @@ translate 插件就失败：按 `a` 时 logcat 是 `key 97: NOT_FOUND`，字段�
   `的 / 们`；再退格清空，联想栏收起。
 - 空输入框进入时不再显示上一次输入遗留的联想；组合内退格、标点与英文链行为
   不变，logcat 无 `surrounding` 报错。
+
+## 联想候选点按无效（2026-11-16）
+
+修退格残留时发现：没有组合串时，点候选栏里的联想词没有任何反应。
+
+### 根因
+
+- 候选点击统一走数字键（`selectCandidate` 发 `1`–`9`），由 candidates-format
+  按页内偏移提交。这条路径只在有组合时成立。
+- 联想候选是 predict 插件在 format 之后直接 `show_candidates` 出来的，链里没有
+  可提交的组合；数字键到达 format 时页码/候选都不存在，于是什么都不发生。
+
+### 改动（`PimeImeService.java`）
+
+- `selectCandidate` 按组合状态分流：有组合仍发数字键；无组合转
+  `commitPrediction`。
+- `commitPrediction` 由宿主直接 `commitText` 插入联想词（先收起候选栏），随后
+  `refreshSurrounding()` 按新光标上下文重新取联想。
+- 取舍：直接提交绕过了 candidates-format / learn-user-dict，选中过的联想词不会
+  进入用户词库（core 目前没有“提交非候选文本”的链路接口）。
+
+### 实测（MuMu 12 / Android 15 / x86_64）
+
+- `nihao` → `你好`，退格到 `你`（联想 `的 / 们`），点 `的` 文本变 `你的`，
+  联想更新为 `话 / 是`；再退格两次清空后候选栏收起。
+- 有组合时点候选仍是数字选词（含翻页后第二页）；英文链与符号页数字选词不变。
+- 期间误触设置页开关导致 default 链少了 parse/rank 三项，已用 assets 的
+  `default.cbor` 恢复，链回到 19 个插件。

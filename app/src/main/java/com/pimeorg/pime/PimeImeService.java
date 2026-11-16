@@ -671,9 +671,17 @@ public final class PimeImeService extends InputMethodService
      * A tap picks by digit, not by candidate index: the chain pages its list,
      * so {@code index} is only the slot on the page currently shown, while the
      * digit is resolved against the page the format plugin believes it is on.
+     *
+     * <p>With no composition the strip is fed by predict-role plugins, which
+     * run after format and never enter its page: there is no digit slot to
+     * resolve, so the tapped text is inserted directly.
      */
     private void selectCandidate(int index) {
         if (!coreReady || !core.hasSession()) return;
+        if (composition.isEmpty()) {
+            commitPrediction(index);
+            return;
+        }
         final char digit = (char) ('1' + index);
         commitSeen = false;
         final int status = core.key(digit, 0, PimeCore.KEY_DOWN,
@@ -681,6 +689,21 @@ public final class PimeImeService extends InputMethodService
         core.pump();
         if (status < 0) Log.w(TAG, "candidate " + index + ": " + text(-status));
         resetAfterCommit();
+    }
+
+    /**
+     * Association candidates are plain text, not a formatting selection: the
+     * chain has no composition to commit, so the host inserts the word and
+     * rebuilds the next suggestions from the new cursor context.
+     */
+    private void commitPrediction(int index) {
+        if (index < 0 || index >= candidates.size()) return;
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        final String text = candidates.get(index);
+        hideCandidates();
+        ic.commitText(text, 1);
+        refreshSurrounding();
     }
 
     /** True for the digits the chain uses to pick a candidate by slot. */
