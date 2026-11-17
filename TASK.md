@@ -249,6 +249,9 @@
       `全部` 仅在筛选后出现、`首笔画 ›` 固定在侧栏底格（笔画模式变返回），
       候选行 48dp + `rowLine` 细线且只给实际候选等宽分格、表格里不再给首位
       画强调胶囊，退格改为铺满末列的平底格 + 新矢量 `ic_backspace`
+- [x] 退格/首笔画不再占独立一行，改为钉在表格最后一行的角格上（4 个格子透明
+      可穿透），最后一行照常出词；面板高度取整行，表格与侧栏加一行高的底部
+      内边距，最后一行可滚到角格上方；已实测滚动与明暗两套
 - [x] `KeyboardTheme` 补面板色令牌：`panel/rail/railText/rowLine/railLine/
       tabTrack/tabActive/tabText/tabActiveText/keyCap`，明暗各一套
 - [x] MuMu 实测明暗两套面板、三个 tab、音节筛选、首笔画上下级、退格删字、

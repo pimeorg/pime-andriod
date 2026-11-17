@@ -124,8 +124,6 @@ public final class PimeImeService extends InputMethodService
      */
     private static final int GRID_PAGE_GUARD = 1000;
     private static final int GRID_ROW_HEIGHT_DP = 48;
-    /** The table's bottom line: the delete key where the keys used to be. */
-    private static final int GRID_BAR_HEIGHT_DP = 48;
     /**
      * pime key codes the keymap plugin turns into page moves: `home` rewinds to
      * the first page, which lets the table be collected in one sweep.
@@ -668,7 +666,10 @@ public final class PimeImeService extends InputMethodService
          * exactly as tall as the table's rows, so the two columns line up. */
         railScroll = new ScrollView(this);
         railScroll.setVerticalScrollBarEnabled(false);
+        railScroll.setClipToPadding(false);
         railScroll.setBackgroundColor(palette.rail);
+        /* Mirrors the table: the last syllable can scroll above the rail foot. */
+        railScroll.setPadding(0, 0, 0, dp(GRID_ROW_HEIGHT_DP));
         railList = new LinearLayout(this);
         railList.setOrientation(LinearLayout.VERTICAL);
         railScroll.addView(railList, new ViewGroup.LayoutParams(
@@ -686,6 +687,8 @@ public final class PimeImeService extends InputMethodService
         gridScroll.setVerticalScrollBarEnabled(false);
         gridScroll.setClipToPadding(false);
         gridScroll.setBackgroundColor(palette.panel);
+        /* The last row can scroll clear of the pinned delete / 首笔画 cells. */
+        gridScroll.setPadding(0, 0, 0, dp(GRID_ROW_HEIGHT_DP));
         gridBoard = new LinearLayout(this);
         gridBoard.setOrientation(LinearLayout.VERTICAL);
         gridScroll.addView(gridBoard, new ViewGroup.LayoutParams(
@@ -696,6 +699,8 @@ public final class PimeImeService extends InputMethodService
         handwritingArea = new LinearLayout(this);
         handwritingArea.setOrientation(LinearLayout.VERTICAL);
         handwritingArea.setVisibility(View.GONE);
+        /* Keep the ink out from under the pinned corner cells. */
+        handwritingArea.setPadding(0, 0, 0, dp(GRID_ROW_HEIGHT_DP));
         handwritingView = new HandwritingView(this);
         handwritingView.setPalette(palette);
         handwritingView.setListener(this::onInkChanged);
@@ -717,11 +722,10 @@ public final class PimeImeService extends InputMethodService
         final LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(palette.panel);
-        /* The rail keeps its column to the very bottom, so the delete line
-         * reads as one more table row instead of a separate bar. The foot of
-         * that column is where 首笔画 lives: always in reach, whatever the
-         * syllable list is doing. */
+        /* The bar is the table's last row band, not a bar under it: the four
+         * cells the delete key does not use stay transparent, so the row's
+         * candidates show through and the table scrolls beneath both corner
+         * cells, exactly like the reference. */
         final LinearLayout railFoot = new LinearLayout(this);
         railFoot.setOrientation(LinearLayout.VERTICAL);
         railFoot.setBackgroundColor(palette.rail);
@@ -752,9 +756,10 @@ public final class PimeImeService extends InputMethodService
         barBody.addView(barCells, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         /* One column of the grid: the delete key lands where the fifth
-         * candidate of the next row would be, as in WeChat's table. */
+         * candidate of the last row would be, as in WeChat's table. */
         for (int column = 1; column < CANDIDATE_GRID_COLUMNS; ++column) {
-            barCells.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+            barCells.addView(new View(this), new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         }
         final ImageButton delete = new ImageButton(this);
         delete.setImageResource(R.drawable.ic_backspace);
@@ -789,8 +794,12 @@ public final class PimeImeService extends InputMethodService
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.START | Gravity.CENTER_VERTICAL));
 
-        panel.addView(bar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_BAR_HEIGHT_DP)));
+        /* Pinned to the bottom band of the table: the delete cell takes the last
+         * row's fifth column, the rail foot its first, and the row's other four
+         * candidates show through between them. */
+        content.addView(bar, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_ROW_HEIGHT_DP),
+                Gravity.BOTTOM));
         renderTabs(palette);
         return panel;
     }
@@ -1759,10 +1768,15 @@ public final class PimeImeService extends InputMethodService
             /* The toolbar (and the hairline under the candidate row) belong to
              * typing; the table gives them up so the panel is just the preedit
              * line, the category track and candidates, as WeChat draws it. */
-            final int wanted = keyAreaHeight + (unfolded
-                    ? dp(CANDIDATE_ROW_HEIGHT_DP) + dp(TOP_BAR_HEIGHT_DP)
-                            + Math.max(1, dp(1) / 2)
-                    : 0);
+            final int room = keyAreaHeight + dp(CANDIDATE_ROW_HEIGHT_DP)
+                    + dp(TOP_BAR_HEIGHT_DP) + Math.max(1, dp(1) / 2);
+            final int tall = dp(GRID_ROW_HEIGHT_DP);
+            final int chrome = dp(TAB_ROW_HEIGHT_DP) + Math.max(1, dp(1) / 2);
+            /* Whole rows only: the pinned last band (delete + 首笔画) has to sit
+             * on a row boundary, otherwise it would slice the row above it. The
+             * leftover dp simply stays with the editor. */
+            final int rows = Math.max(2, (room - chrome) / tall);
+            final int wanted = unfolded ? chrome + rows * tall : room;
             if (params != null && params.height != wanted) {
                 params.height = wanted;
                 candidatePanel.setLayoutParams(params);
