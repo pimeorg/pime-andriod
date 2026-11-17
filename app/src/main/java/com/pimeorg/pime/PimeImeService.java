@@ -146,6 +146,8 @@ public final class PimeImeService extends InputMethodService
     private File pluginDir;
     private KeyboardView keyboard;
     private ImeToolbar toolbar;
+    /** Hairline between the candidate row and the key area. */
+    private View keyboardDivider;
     /** Palette the current view was built with; candidates must match it. */
     private KeyboardTheme inputPalette;
     private LinearLayout candidateRow;
@@ -543,6 +545,7 @@ public final class PimeImeService extends InputMethodService
 
         final View divider = new View(this);
         divider.setBackgroundColor(palette.divider);
+        keyboardDivider = divider;
         root.addView(divider, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
 
@@ -625,8 +628,12 @@ public final class PimeImeService extends InputMethodService
          * too narrow to hold track plus chevron makes it give way. */
         tabRow.addOnLayoutChangeListener((v, left, top, right, bottom,
                                           oldLeft, oldTop, oldRight, oldBottom) -> {
+            /* 62% of the width is what the reference's track measures on a
+             * 411dp screen; the cap keeps it from ballooning on tablets and the
+             * floor keeps the three labels readable on narrow phones. */
             final int width = Math.min(dp(TAB_WIDTH_DP),
-                    Math.max(dp(180), v.getWidth() - dp(108)));
+                    Math.max(dp(180), Math.min(v.getWidth() - dp(108),
+                            Math.round(v.getWidth() * 0.62f))));
             if (width > 0 && tabsParams.width != width) {
                 tabsParams.width = width;
                 tabs.setLayoutParams(tabsParams);
@@ -1749,12 +1756,23 @@ public final class PimeImeService extends InputMethodService
         if (candidatePanel != null) {
             candidatePanel.setVisibility(unfolded ? View.VISIBLE : View.GONE);
             final ViewGroup.LayoutParams params = candidatePanel.getLayoutParams();
-            final int wanted = keyAreaHeight
-                    + (unfolded ? dp(CANDIDATE_ROW_HEIGHT_DP) : 0);
+            /* The toolbar (and the hairline under the candidate row) belong to
+             * typing; the table gives them up so the panel is just the preedit
+             * line, the category track and candidates, as WeChat draws it. */
+            final int wanted = keyAreaHeight + (unfolded
+                    ? dp(CANDIDATE_ROW_HEIGHT_DP) + dp(TOP_BAR_HEIGHT_DP)
+                            + Math.max(1, dp(1) / 2)
+                    : 0);
             if (params != null && params.height != wanted) {
                 params.height = wanted;
                 candidatePanel.setLayoutParams(params);
             }
+        }
+        if (toolbar != null) {
+            toolbar.setVisibility(unfolded ? View.GONE : View.VISIBLE);
+        }
+        if (keyboardDivider != null) {
+            keyboardDivider.setVisibility(unfolded ? View.GONE : View.VISIBLE);
         }
         if (keyboard != null) {
             keyboard.setVisibility(unfolded ? View.GONE : View.VISIBLE);
