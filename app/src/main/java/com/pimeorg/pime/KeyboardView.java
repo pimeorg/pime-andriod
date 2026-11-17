@@ -39,6 +39,13 @@ public final class KeyboardView extends View {
     private static final int PAGE_LETTERS = 0;
     private static final int PAGE_SYMBOLS = 1;
 
+    /** No vertical drag on ⌫ in progress. */
+    private static final int SWIPE_NONE = 0;
+    /** ⌫ dragged up: clear the input in one go (the long press deletes slowly). */
+    private static final int SWIPE_CLEAR = 1;
+    /** ⌫ dragged down: undo the last run of deletes, once per gesture. */
+    private static final int SWIPE_UNDO = 2;
+
     public static final class Key {
         public final String label;
         public final int code;
@@ -105,6 +112,21 @@ public final class KeyboardView extends View {
          */
         default void onVoiceRelease(boolean cancelled) {
         }
+
+        /**
+         * The ⌫ key was dragged up: clear the preedit and the text before the
+         * cursor at once, which the long press (slow repeated deletes) cannot
+         * do in one gesture.
+         */
+        default void onDeleteAll() {
+        }
+
+        /**
+         * The ⌫ key was dragged down far enough to undo: the host puts back the
+         * text the last run of deletes removed.
+         */
+        default void onUndo() {
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -128,6 +150,10 @@ public final class KeyboardView extends View {
     private final RectF edgeRect = new RectF();
     private final Handler repeatHandler = new Handler(Looper.getMainLooper());
     private Key repeatKey;
+    /** Which vertical drag the current ⌫ press took; see SWIPE_*. */
+    private int deleteSwipe = SWIPE_NONE;
+    /** Read once per press: the preference must not change under a finger. */
+    private boolean deleteSwipeOn;
     /** True from a successful voice hold until the finger leaves the space key. */
     private boolean voiceLive;
     private float downX;
@@ -662,6 +688,8 @@ public final class KeyboardView extends View {
                 downCol = hit[1];
                 downX = event.getX();
                 downY = event.getY();
+                deleteSwipe = SWIPE_NONE;
+                deleteSwipeOn = Prefs.swipeDelete(getContext());
                 invalidate();
                 final Key down = row(pressedRow).get(pressedCol);
                 if (down.kind == KIND_BACKSPACE) {
@@ -677,6 +705,12 @@ public final class KeyboardView extends View {
                 /* A live voice turn owns the gesture: sliding off the key must
                  * not turn it into a stray key press. */
                 if (voiceLive) return true;
+                if (deleteSwipeOn && downRow >= 0
+                        && pages[page].get(downRow).get(downCol).kind
+                        == KIND_BACKSPACE
+                        && trackDeleteSwipe(event.getY())) {
+                    return true;
+                }
                 /* Keep the starting key lit while the finger is above it: a
                  * swipe up leaves the key bounds (the top row has no row above),
                  * and hit testing would drop the press before ACTION_UP. */
@@ -705,6 +739,12 @@ public final class KeyboardView extends View {
                     voiceLive = false;
                     clearPressed();
                     if (listener != null) listener.onVoiceRelease(false);
+                    return true;
+                }
+                /* A delete swipe already did its work (the repeat, or the
+                 * undo); releasing must not also type the key. */
+                if (deleteSwipe != SWIPE_NONE) {
+                    clearPressed();
                     return true;
                 }
                 final Key start = downRow >= 0
@@ -747,9 +787,68 @@ public final class KeyboardView extends View {
         downRow = -1;
         downCol = -1;
         repeatKey = null;
+        deleteSwipe = SWIPE_NONE;
         repeatHandler.removeCallbacks(repeatRunnable);
         repeatHandler.removeCallbacks(voiceHoldRunnable);
         invalidate();
+    }
+
+    /**
+     * A vertical drag on ⌫. Up clears the input in one go — a long press only
+     * deletes slowly, one key at a time, so the two gestures stay distinct;
+     * down undoes the last run of deletes once. Whichever direction is taken
+     * first owns the rest of the gesture, and the key stays lit throughout so
+     * the finger can see it is still on the delete key.
+     */
+    private boolean trackDeleteSwipe(float y) {
+        if (deleteSwipe != SWIPE_NONE) {
+            pressedRow = downRow;
+            pressedCol = downCol;
+            return true;
+        }
+        final float dy = downY - y;
+        final float threshold = Math.max(dp(22), keyHeight() * 0.45f);
+        if (dy >= threshold) {
+            deleteSwipe = SWIPE_CLEAR;
+            pressedRow = downRow;
+            pressedCol = downCol;
+            /* The long press may already be repeating under this finger; the
+             * clear replaces it rather than adding to it. */
+            repeatKey = null;
+            repeatHandler.removeCallbacks(repeatRunnable);
+            swipeFeedback();
+            invalidate();
+            if (listener != null) listener.onDeleteAll();
+            return true;
+        }
+        if (-dy >= threshold) {
+            deleteSwipe = SWIPE_UNDO;
+            pressedRow = downRow;
+            pressedCol = downCol;
+            repeatKey = null;
+            repeatHandler.removeCallbacks(repeatRunnable);
+            swipeFeedback();
+            invalidate();
+            if (listener != null) listener.onUndo();
+            return true;
+        }
+        return false;
+    }
+
+    private float keyHeight() {
+        if (bounds == null || boundsPage != page || downRow < 0
+                || downRow >= bounds.length || downCol < 0
+                || downCol >= bounds[downRow].length) {
+            return dp(48);
+        }
+        return bounds[downRow][downCol].height();
+    }
+
+    /** One tap of feedback when a delete swipe starts; the repeat stays quiet. */
+    private void swipeFeedback() {
+        if (Prefs.vibrate(getContext())) {
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        }
     }
 
     /**

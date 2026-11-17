@@ -1253,6 +1253,12 @@ public final class SettingsActivity extends AppCompatActivity {
             addSwitchRow(feel, R.drawable.ic_volume_up, getString(R.string.row_sound),
                     getString(R.string.row_sound_desc), Prefs.sound(this),
                     (button, checked) -> Prefs.setSound(this, checked));
+            addDivider(feel);
+            addSwitchRow(feel, R.drawable.ic_backspace,
+                    getString(R.string.row_swipe_delete),
+                    getString(R.string.row_swipe_delete_desc),
+                    Prefs.swipeDelete(this),
+                    (button, checked) -> Prefs.setSwipeDelete(this, checked));
 
             addGroupTitle(parent, R.string.section_display);
             final LinearLayout display = addCard(parent);

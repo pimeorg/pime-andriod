@@ -83,6 +83,9 @@
     <string name="row_vibrate_desc">按下按键时轻微震动</string>
     <string name="row_sound">按键音</string>
     <string name="row_sound_desc">按下按键时播放系统点击音</string>
+    <string name="row_swipe_delete">删除键滑动</string>
+    <string name="row_swipe_delete_desc">在删除键上滑一次清空输入，下滑撤销刚才的删除</string>
+    <string name="undo_nothing">没有可撤销的删除</string>
     <string name="row_candidates">候选数量</string>
     <string name="row_candidates_desc">候选栏最多显示几个候选</string>
     <string name="row_pinyin_separator">拼音分隔</string>

@@ -132,6 +132,18 @@ public final class PimeImeService extends InputMethodService
     /** Horizontal breathing room inside a table cell, each side. */
     private static final int GRID_CELL_PADDING_DP = 6;
     /**
+     * A run of deletes stays open for one swipe-down undo this long, in ms: a
+     * pause or any other key ends it, so undo walks back whole runs rather
+     * than one character at a time.
+     */
+    private static final long UNDO_GROUP_MS = 1200;
+    /** Delete runs kept for undo; the oldest is dropped first. */
+    private static final int UNDO_RUNS = 8;
+    /** Characters read per call while a swipe-up clear walks the field. */
+    private static final int CLEAR_CHUNK = 1000;
+    /** Upper bound on those calls, so a misbehaving editor cannot spin us. */
+    private static final int CLEAR_CHUNKS = 100;
+    /**
      * pime key codes the keymap plugin turns into page moves: `home` rewinds to
      * the first page, which lets the table be collected in one sweep.
      */
@@ -163,6 +175,12 @@ public final class PimeImeService extends InputMethodService
     private ImageButton expandButton;
     private TextView compositionView;
     private String composition = "";
+    /**
+     * Runs of text ⌫ removed, newest last, restored one per swipe down on ⌫.
+     * Purely host-side: the chain has no undo, and a swipe-down must put back
+     * what the editor actually lost.
+     */
+    private final List<DeleteRun> undoRuns = new ArrayList<>();
     /**
      * The table that takes over the key area while candidates are unfolded.
      *
@@ -1307,6 +1325,7 @@ public final class PimeImeService extends InputMethodService
         super.onStartInput(attribute, restarting);
         cancelVoice();
         composition = "";
+        undoRuns.clear();
         secureField = isPassword(attribute.inputType);
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
@@ -1363,6 +1382,7 @@ public final class PimeImeService extends InputMethodService
             core.pump();
         }
         composition = "";
+        undoRuns.clear();
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
         super.onFinishInput();
@@ -1370,6 +1390,10 @@ public final class PimeImeService extends InputMethodService
 
     @Override
     public void onKey(KeyboardView.Key key) {
+        final boolean backspace = key.kind == KeyboardView.KIND_BACKSPACE;
+        /* Swipe-down undo only restores what a run of deletes just removed.
+         * Any other key moves the cursor context, so the journal ends here. */
+        if (!backspace) undoRuns.clear();
         final boolean shifted = keyboard != null && keyboard.isShiftDown();
         final String text = key.kind == KeyboardView.KIND_CHAR
                 || key.kind == KeyboardView.KIND_SPACE
@@ -1394,10 +1418,14 @@ public final class PimeImeService extends InputMethodService
                 if (commitEnglishCompositionThen(text)) return;
             }
             commitSeen = false;
+            /* The preedit the chain is about to shorten; captured before the
+             * key runs, because pump() reports the new one back. */
+            final String beforeComposition = composition;
             final int status = core.key(key.code,
                     shifted ? PimeCore.MOD_SHIFT : 0, PimeCore.KEY_DOWN, text);
             core.pump();
             if (status == 1) {
+                if (backspace) noteCompositionDeletion(beforeComposition);
                 /* The chain confirms the typed word on space; the space the
                  * user pressed belongs in the editor, not in the candidate. */
                 if (english && key.kind == KeyboardView.KIND_SPACE) appendSpace();
@@ -1483,11 +1511,14 @@ public final class PimeImeService extends InputMethodService
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         switch (key.kind) {
-            case KeyboardView.KIND_BACKSPACE:
+            case KeyboardView.KIND_BACKSPACE: {
                 /* Soft keyboards cannot rely on sendKeyEvent reaching text
                  * fields; deleteSurroundingText is the supported path. */
+                final CharSequence before = ic.getTextBeforeCursor(1, 0);
                 ic.deleteSurroundingText(1, 0);
+                noteEditorDeletion(before == null ? "" : before.toString());
                 break;
+            }
             case KeyboardView.KIND_ENTER:
                 ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN,
                         KeyEvent.KEYCODE_ENTER));
@@ -1505,6 +1536,132 @@ public final class PimeImeService extends InputMethodService
         final char value = (char) key.code;
         if (!shifted || !key.isLetter()) return value;
         return Character.toUpperCase(value);
+    }
+
+    /**
+     * Records one character ⌫ removed from the editor. Consecutive deletes
+     * group into a run (newest first, because the text goes back before the
+     * cursor in the order it was typed); a pause or another key starts a new
+     * run. Secure fields are never journalled — the undo buffer would outlive
+     * the field and keep a password in memory.
+     */
+    private void noteEditorDeletion(String removed) {
+        if (removed.isEmpty() || secureField) return;
+        final long now = SystemClock.uptimeMillis();
+        DeleteRun run = undoRuns.isEmpty() ? null : undoRuns.get(undoRuns.size() - 1);
+        if (run == null || !run.composition.isEmpty()
+                || now - run.at > UNDO_GROUP_MS) {
+            run = new DeleteRun();
+            undoRuns.add(run);
+            if (undoRuns.size() > UNDO_RUNS) undoRuns.remove(0);
+        }
+        run.text.insert(0, removed);
+        run.at = now;
+    }
+
+    /**
+     * Records the preedit ⌫ is about to shorten. Only the run's first snapshot
+     * is kept, so one undo puts the whole composition back instead of one
+     * letter per swipe.
+     */
+    private void noteCompositionDeletion(String before) {
+        if (before.isEmpty() || secureField) return;
+        final long now = SystemClock.uptimeMillis();
+        DeleteRun run = undoRuns.isEmpty() ? null : undoRuns.get(undoRuns.size() - 1);
+        if (run != null && run.text.length() == 0
+                && !run.composition.isEmpty()
+                && now - run.at <= UNDO_GROUP_MS) {
+            run.at = now;
+            return;
+        }
+        run = new DeleteRun();
+        run.composition = before;
+        undoRuns.add(run);
+        if (undoRuns.size() > UNDO_RUNS) undoRuns.remove(0);
+    }
+
+    /** ⌫ swiped down: put back the last run of deletes. */
+    @Override
+    public void onUndo() {
+        if (undoRuns.isEmpty()) {
+            toast(R.string.undo_nothing);
+            return;
+        }
+        final DeleteRun run = undoRuns.remove(undoRuns.size() - 1);
+        if (run.text.length() > 0) {
+            final InputConnection ic = getCurrentInputConnection();
+            if (ic == null) return;
+            /* Editor text sat before the preedit (a clear removes both), so it
+             * goes back first and the preedit is then rebuilt on top. */
+            ic.commitText(run.text.toString(), 1);
+        }
+        if (!run.composition.isEmpty()) {
+            restoreComposition(run.composition);
+        } else if (run.text.length() > 0) {
+            refreshSurrounding();
+        }
+    }
+
+    /**
+     * ⌫ swiped up: clear the preedit and everything before the cursor in one
+     * go. This is the point of the gesture — a long press deletes one key at a
+     * time and would take a while on a filled field. The whole clear is one
+     * undo entry, so a single swipe down puts it all back.
+     */
+    @Override
+    public void onDeleteAll() {
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        final String preedit = composition;
+        if (!preedit.isEmpty()) {
+            if (coreReady && core.hasSession()) {
+                report(core.reset(), "reset");
+                core.pump();
+            }
+            composition = "";
+            if (compositionView != null) compositionView.setText("");
+            hideCandidates();
+        }
+        /* Read and delete in chunks: editors cap how much one call may remove,
+         * and every chunk has to land in the same undo entry. */
+        final StringBuilder removed = new StringBuilder();
+        for (int guard = 0; guard < CLEAR_CHUNKS; ++guard) {
+            final CharSequence before = ic.getTextBeforeCursor(CLEAR_CHUNK, 0);
+            if (before == null || before.length() == 0) break;
+            ic.deleteSurroundingText(before.length(), 0);
+            removed.insert(0, before);
+        }
+        if (!secureField && (removed.length() > 0 || !preedit.isEmpty())) {
+            final DeleteRun run = new DeleteRun();
+            run.text.append(removed);
+            run.composition = preedit;
+            undoRuns.add(run);
+            if (undoRuns.size() > UNDO_RUNS) undoRuns.remove(0);
+        }
+        if (composition.isEmpty() && !candidates.isEmpty()) refreshSurrounding();
+    }
+
+    /**
+     * Puts a preedit back that ⌫ had shortened. {@code reset} is the chain's
+     * cancel contract, and the letters are then fed back as keys so the parse
+     * and rank plugins rebuild the same composition and candidate list as
+     * before the deletes (the chain keeps no undo of its own).
+     */
+    private void restoreComposition(String text) {
+        if (!coreReady || !core.hasSession()) return;
+        report(core.reset(), "reset");
+        core.pump();
+        composition = "";
+        if (compositionView != null) compositionView.setText("");
+        hideCandidates();
+        for (int i = 0; i < text.length(); ++i) {
+            final char c = text.charAt(i);
+            final int status = core.key(c, 0, PimeCore.KEY_DOWN, String.valueOf(c));
+            if (status < 0) {
+                Log.w(TAG, "undo key " + c + ": " + core.statusString(-status));
+            }
+            core.pump();
+        }
     }
 
     /**
@@ -1674,6 +1831,9 @@ public final class PimeImeService extends InputMethodService
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null && text != null && !text.isEmpty()) ic.commitText(text, 1);
         composition = "";
+        /* Text landed at the cursor, so an old delete run no longer sits where
+         * undo would put it back. */
+        undoRuns.clear();
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
     }
@@ -1939,6 +2099,15 @@ public final class PimeImeService extends InputMethodService
         candidates.clear();
         candidates.addAll(gridPages.get(target));
         stripOffset = 0;
+    }
+
+    /** What one undo unit removed: editor text, a preedit, or both. */
+    private static final class DeleteRun {
+        /** Editor characters in restore order (newest delete first). */
+        final StringBuilder text = new StringBuilder();
+        /** Composition as it stood before the run; empty when it had none. */
+        String composition = "";
+        long at = SystemClock.uptimeMillis();
     }
 
     /** One visible cell and the index that picks it. */

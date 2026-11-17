@@ -86,6 +86,19 @@ public final class Prefs {
         prefs(context).edit().putBoolean("sound", value).apply();
     }
 
+    /**
+     * Swipe up on the delete key to clear the input in one go, swipe down to
+     * undo the last run of deletes. Read by the key surface on each press, so
+     * no rebuild.
+     */
+    public static boolean swipeDelete(Context context) {
+        return prefs(context).getBoolean("swipe_delete", true);
+    }
+
+    public static void setSwipeDelete(Context context, boolean value) {
+        prefs(context).edit().putBoolean("swipe_delete", value).apply();
+    }
+
     public static int keyboardPercent(Context context) {
         return prefs(context).getInt("keyboard_percent", 100);
     }
