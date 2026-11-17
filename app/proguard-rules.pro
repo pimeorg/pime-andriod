@@ -28,6 +28,7 @@
 # that AGP generates; listed here only so the intent is visible.
 -keep class com.pimeorg.pime.PimeApplication { *; }
 -keep class com.pimeorg.pime.PimeImeService { *; }
+-keep class com.tencent.qqpinyin.LocalImageBridge { *; }
 -keep class com.pimeorg.pime.SettingsActivity { *; }
 -keep class com.pimeorg.pime.VoicePermissionActivity { *; }
 

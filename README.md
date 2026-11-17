@@ -100,7 +100,7 @@ keytool -genkeypair -v -keystore app/pime-release.jks -alias pime \
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-# 打开 "PIME 输入法" → 启用输入法 → 选择输入法
+# 打开 "派码输入法" → 启用输入法 → 选择输入法
 ```
 
 ## 数据目录

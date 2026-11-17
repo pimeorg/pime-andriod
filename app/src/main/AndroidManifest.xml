@@ -34,7 +34,7 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <service
-            android:name=".PimeImeService"
+            android:name="com.tencent.qqpinyin.LocalImageBridge"
             android:exported="true"
             android:label="@string/ime_name"
             android:permission="android.permission.BIND_INPUT_METHOD">

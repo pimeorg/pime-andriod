@@ -66,7 +66,7 @@ import java.util.Map;
  * offered to the core first; whatever the core does not handle is passed to
  * the editor, so the keyboard stays usable with no plugins installed.
  */
-public final class PimeImeService extends InputMethodService
+public class PimeImeService extends InputMethodService
         implements PimeCore.Listener, KeyboardView.Listener {
     private static final String TAG = "PimeIme";
 

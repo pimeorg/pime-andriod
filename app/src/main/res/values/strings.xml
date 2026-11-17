@@ -1,28 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">PIME 输入法</string>
-    <string name="ime_name">PIME 输入法（pime-core）</string>
+    <string name="app_name">派码输入法</string>
+    <string name="ime_name">派码输入法</string>
     <string name="subtype_label">中文 / 英文</string>
 
-    <string name="home_title">PIME</string>
+    <string name="home_title">派码</string>
     <string name="about_button">关于</string>
-    <string name="hero_title">PIME 输入法</string>
+    <string name="hero_title">派码输入法</string>
     <string name="hero_tagline">让输入顺手一点</string>
     <string name="hero_test_hint">在这里试试输入…</string>
     <string name="hero_test_helper">试试 nihao、hbg、zsh</string>
-    <string name="hero_test_helper_other_ime">当前不是 PIME 输入法，输入走系统输入法</string>
-    <string name="hero_test_other_ime_snack">这里只能用当前输入法，切到 PIME 才会出现候选</string>
+    <string name="hero_test_helper_other_ime">当前不是派码输入法，输入走系统输入法</string>
+    <string name="hero_test_other_ime_snack">这里只能用当前输入法，切到派码才会出现候选</string>
 
     <string name="status_pill_ready">● 已就绪</string>
     <string name="status_pill_enabled">● 已启用，未切换</string>
     <string name="status_pill_disabled">● 未启用</string>
 
-    <string name="step1_title">启用 PIME 输入法</string>
-    <string name="step1_desc">在系统设置中打开「PIME 输入法」的开关。</string>
-    <string name="step1_note">系统会提示输入法可能收集输入内容。PIME 的分词、词典与候选全部在本机插件里完成，不联网。</string>
+    <string name="step1_title">启用派码输入法</string>
+    <string name="step1_desc">在系统设置中打开「派码输入法」的开关。</string>
+    <string name="step1_note">系统会提示输入法可能收集输入内容。派码的分词、词典与候选全部在本机插件里完成，不联网。</string>
     <string name="step1_action">去启用</string>
     <string name="step2_title">切换为默认输入法</string>
-    <string name="step2_desc">选择「PIME 输入法（pime-core）」。</string>
+    <string name="step2_desc">选择「派码输入法」。</string>
     <string name="step2_action">选择输入法</string>
     <string name="step_done">✓</string>
 
@@ -35,7 +35,7 @@
     <string name="row_storage">存储位置</string>
 
     <string name="group_about">关于</string>
-    <string name="row_about">关于 PIME</string>
+    <string name="row_about">关于派码</string>
     <string name="row_core">输入内核</string>
     <string name="row_core_desc">pime-core · 原生 C ABI + WASM 插件</string>
 
@@ -69,8 +69,8 @@
 
     <string name="copy_path">复制路径</string>
     <string name="copied">已复制：%1$s</string>
-    <string name="snack_enabled">已启用 PIME 输入法</string>
-    <string name="snack_disabled">已停用 PIME 输入法</string>
+    <string name="snack_enabled">已启用派码输入法</string>
+    <string name="snack_disabled">已停用派码输入法</string>
     <string name="snack_default">已切换为默认输入法</string>
     <string name="role_unknown">未知角色</string>
 
