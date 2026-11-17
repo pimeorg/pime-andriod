@@ -318,9 +318,15 @@ public final class SettingsActivity extends AppCompatActivity {
     }
 
     private boolean isCurrentInputMethod(InputMethodManager imm) {
-        if (Build.VERSION.SDK_INT >= 34) {
+        if (imm != null && Build.VERSION.SDK_INT >= 34) {
+            /* Ask the framework first, but do not trust a negative on its own:
+             * on some builds getCurrentInputMethodInfo() still reports the
+             * previously bound method after a switch, and the settings page
+             * would claim "not switched" while the keyboard is already ours. */
             final InputMethodInfo info = imm.getCurrentInputMethodInfo();
-            return info != null && getPackageName().equals(info.getPackageName());
+            if (info != null && getPackageName().equals(info.getPackageName())) {
+                return true;
+            }
         }
         final String current = Settings.Secure.getString(getContentResolver(),
                 Settings.Secure.DEFAULT_INPUT_METHOD);

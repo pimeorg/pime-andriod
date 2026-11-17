@@ -39,6 +39,21 @@ public final class KeyboardTheme {
     public final int divider;
     public final int candidateText;
     public final int ripple;
+    /** Candidate table surface (unfolded panel). */
+    public final int panel;
+    /** Syllable column behind the table. */
+    public final int rail;
+    public final int railText;
+    /** Line between table rows, and the same line inside the rail. */
+    public final int rowLine;
+    public final int railLine;
+    /** Segmented category track and the active tab inside it. */
+    public final int tabTrack;
+    public final int tabActive;
+    public final int tabText;
+    public final int tabActiveText;
+    /** Flat fill behind the table's delete key. */
+    public final int keyCap;
 
     private KeyboardTheme(boolean dark) {
         if (dark) {
@@ -61,6 +76,16 @@ public final class KeyboardTheme {
             divider = 0xFF2A2C31;
             candidateText = 0xFFE9EBEF;
             ripple = 0x33FFFFFF;
+            panel = 0xFF202124;
+            rail = 0xFF33353A;
+            railText = 0xFFC9CCD2;
+            rowLine = 0xFF35373B;
+            railLine = 0xFF4A4D52;
+            tabTrack = 0xFF292B2F;
+            tabActive = 0xFF43464C;
+            tabText = 0xFFD5D7DB;
+            tabActiveText = 0xFFF3F4F6;
+            keyCap = 0xFF3D4045;
         } else {
             board = 0xFFE9ECF1;
             key = 0xFFFFFFFF;
@@ -81,6 +106,16 @@ public final class KeyboardTheme {
             divider = 0xFFDDE1E8;
             candidateText = 0xFF1B1E23;
             ripple = 0x1F2E6CF6;
+            panel = 0xFFF3F4F7;
+            rail = 0xFFE7E9EE;
+            railText = 0xFF5E6570;
+            rowLine = 0xFFE3E6EC;
+            railLine = 0xFFD3D8E0;
+            tabTrack = 0xFFE8EAF0;
+            tabActive = 0xFFFFFFFF;
+            tabText = 0xFF5E6570;
+            tabActiveText = 0xFF1B1E23;
+            keyCap = 0xFFE1E5EC;
         }
     }
 

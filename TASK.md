@@ -243,3 +243,15 @@
 - [x] 验证：core/plugin ctest、`assembleRelease testDebugUnitTest` 全过；
       MuMu 实测 `s`/`sh`/`n` 候选正确
 - [ ] arm64 物理设备上复测折叠态单键延迟
+- [x] 候选面板对齐微信输入法外观：分类条改为浮层轨道（居中 250dp 胶囊底 +
+      内缩选中块 + 同行右侧 `⌃`），展开时面板吃掉折叠条那一行（总高不变，
+      多出一行候选），音节侧栏与候选行等高对齐（`rail`/`railLine`）、
+      `全部` 仅在筛选后出现、`首笔画 ›` 固定在侧栏底格（笔画模式变返回），
+      候选行 48dp + `rowLine` 细线且只给实际候选等宽分格、表格里不再给首位
+      画强调胶囊，退格改为铺满末列的平底格 + 新矢量 `ic_backspace`
+- [x] `KeyboardTheme` 补面板色令牌：`panel/rail/railText/rowLine/railLine/
+      tabTrack/tabActive/tabText/tabActiveText/keyCap`，明暗各一套
+- [x] MuMu 实测明暗两套面板、三个 tab、音节筛选、首笔画上下级、退格删字、
+      `⌃` 收起回键盘；截图 `screenshots/candidates_table_{light,dark}.png`
+- [x] 修复设置页“是否已切换”误判：API 34+ 框架接口返回他法时回退比对
+      `Settings.Secure.DEFAULT_INPUT_METHOD`

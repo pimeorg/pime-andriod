@@ -19,10 +19,14 @@ import android.os.SystemClock;
 import android.widget.Toast;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.text.InputType;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
@@ -119,9 +123,9 @@ public final class PimeImeService extends InputMethodService
      * limit.
      */
     private static final int GRID_PAGE_GUARD = 1000;
-    private static final int GRID_ROW_HEIGHT_DP = 46;
+    private static final int GRID_ROW_HEIGHT_DP = 48;
     /** The table's bottom line: the delete key where the keys used to be. */
-    private static final int GRID_BAR_HEIGHT_DP = 52;
+    private static final int GRID_BAR_HEIGHT_DP = 48;
     /**
      * pime key codes the keymap plugin turns into page moves: `home` rewinds to
      * the first page, which lets the table be collected in one sweep.
@@ -165,6 +169,8 @@ public final class PimeImeService extends InputMethodService
     private LinearLayout gridBoard;
     private ScrollView gridScroll;
     private boolean candidatesExpanded;
+    /** Height of the key rectangle the panel takes over when unfolded. */
+    private int keyAreaHeight;
 
     /* ---- unfolded panel: tabs, syllable rail, handwriting ---- */
 
@@ -174,8 +180,11 @@ public final class PimeImeService extends InputMethodService
     private static final int RAIL_SYLLABLES = 0;
     private static final int RAIL_STROKES = 1;
     private static final int TAB_ROW_HEIGHT_DP = 38;
-    private static final int RAIL_WIDTH_DP = 60;
-    private static final int RAIL_ITEM_HEIGHT_DP = 42;
+    /** Height of the rounded category track inside the tab row. */
+    private static final int TAB_HEIGHT_DP = 34;
+    /** Width the category track asks for; narrow screens shrink it. */
+    private static final int TAB_WIDTH_DP = 250;
+    private static final int RAIL_WIDTH_DP = 64;
     private static final int HANDWRITING_RESULT_HEIGHT_DP = 46;
 
     private int panelTab = TAB_FREQUENCY;
@@ -185,6 +194,10 @@ public final class PimeImeService extends InputMethodService
     /** First-stroke bucket the table is filtered to; -1 means no filter. */
     private int railStroke = -1;
     private final TextView[] tabViews = new TextView[3];
+    /** Collapse chevron on the category line; the folded strip has its own. */
+    private ImageButton panelChevron;
+    /** Bottom cell of the rail column: 首笔画, or the way back from it. */
+    private TextView railFootItem;
     private LinearLayout gridArea;
     private LinearLayout railList;
     private ScrollView railScroll;
@@ -477,7 +490,7 @@ public final class PimeImeService extends InputMethodService
 
         compositionView = new TextView(this);
         compositionView.setTextColor(palette.hint);
-        compositionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        compositionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         compositionView.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         compositionView.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         compositionView.setSingleLine(true);
@@ -534,6 +547,7 @@ public final class PimeImeService extends InputMethodService
                 ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
 
         final int keyboardHeight = keyboardHeight(palette);
+        keyAreaHeight = keyboardHeight;
         keyboard = new KeyboardView(this);
         keyboard.setKeyboardTheme(palette);
         keyboard.setEnglish(Prefs.english(this));
@@ -580,15 +594,22 @@ public final class PimeImeService extends InputMethodService
     private LinearLayout buildCandidatePanel(KeyboardTheme palette) {
         final LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(palette.board);
+        panel.setBackgroundColor(palette.panel);
         panel.setVisibility(View.GONE);
 
-        /* Category line, the way WeChat separates \u8bcd\u9891 / \u5355\u5b57 / \u624b\u5199\u627e\u5b57:
-         * equal thirds, the active one a soft accent pill. */
+        /* Category line, the way WeChat separates the categories: one rounded
+         * track holding three equal tabs, the active one a lighter pill inside
+         * the track, and the collapse chevron on the same line at the right,
+         * outside the track. */
+        final FrameLayout tabRow = new FrameLayout(this);
+        tabRow.setBackgroundColor(palette.panel);
         final LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
         tabs.setGravity(Gravity.CENTER_VERTICAL);
-        tabs.setPadding(dp(6), 0, dp(6), 0);
+        final GradientDrawable track = new GradientDrawable();
+        track.setCornerRadius(dp(10));
+        track.setColor(palette.tabTrack);
+        tabs.setBackground(track);
         tabViews[TAB_FREQUENCY] = panelTabView(R.string.ime_tab_frequency, TAB_FREQUENCY);
         tabViews[TAB_SINGLE] = panelTabView(R.string.ime_tab_single, TAB_SINGLE);
         tabViews[TAB_HANDWRITING] = panelTabView(R.string.ime_tab_handwriting,
@@ -597,8 +618,32 @@ public final class PimeImeService extends InputMethodService
             tabs.addView(tab, new LinearLayout.LayoutParams(0,
                     ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         }
-        panel.addView(tabs, new LinearLayout.LayoutParams(
+        final FrameLayout.LayoutParams tabsParams = new FrameLayout.LayoutParams(
+                dp(TAB_WIDTH_DP), dp(TAB_HEIGHT_DP), Gravity.CENTER);
+        tabRow.addView(tabs, tabsParams);
+        /* The track is a fixed size and stays screen-centred; only a screen
+         * too narrow to hold track plus chevron makes it give way. */
+        tabRow.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                          oldLeft, oldTop, oldRight, oldBottom) -> {
+            final int width = Math.min(dp(TAB_WIDTH_DP),
+                    Math.max(dp(180), v.getWidth() - dp(108)));
+            if (width > 0 && tabsParams.width != width) {
+                tabsParams.width = width;
+                tabs.setLayoutParams(tabsParams);
+            }
+        });
+        panelChevron = chevronButton(palette);
+        panelChevron.setRotation(180f);
+        panelChevron.setContentDescription(getString(R.string.ime_action_collapse));
+        panelChevron.setOnClickListener(v -> toggleCandidatePanel());
+        tabRow.addView(panelChevron, new FrameLayout.LayoutParams(dp(44),
+                ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END | Gravity.CENTER_VERTICAL));
+        panel.addView(tabRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(TAB_ROW_HEIGHT_DP)));
+        final View tabRule = new View(this);
+        tabRule.setBackgroundColor(palette.rowLine);
+        panel.addView(tabRule, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
 
         final FrameLayout content = new FrameLayout(this);
         panel.addView(content, new LinearLayout.LayoutParams(
@@ -607,14 +652,16 @@ public final class PimeImeService extends InputMethodService
         /* Table and handwriting share the content rectangle. */
         gridArea = new LinearLayout(this);
         gridArea.setOrientation(LinearLayout.HORIZONTAL);
+        gridArea.setBackgroundColor(palette.panel);
         content.addView(gridArea, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         /* Left rail: syllables of the candidates' first characters, or the
-         * first-stroke buckets once \u9996\u7b14\u753b is tapped. */
+         * first-stroke buckets once the stroke item is tapped. Its items are
+         * exactly as tall as the table's rows, so the two columns line up. */
         railScroll = new ScrollView(this);
         railScroll.setVerticalScrollBarEnabled(false);
-        railScroll.setBackgroundColor(palette.bar);
+        railScroll.setBackgroundColor(palette.rail);
         railList = new LinearLayout(this);
         railList.setOrientation(LinearLayout.VERTICAL);
         railScroll.addView(railList, new ViewGroup.LayoutParams(
@@ -623,7 +670,7 @@ public final class PimeImeService extends InputMethodService
                 dp(RAIL_WIDTH_DP), ViewGroup.LayoutParams.MATCH_PARENT));
 
         final View railDivider = new View(this);
-        railDivider.setBackgroundColor(palette.divider);
+        railDivider.setBackgroundColor(palette.rowLine);
         gridArea.addView(railDivider, new LinearLayout.LayoutParams(
                 Math.max(1, dp(1) / 2), ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -631,6 +678,7 @@ public final class PimeImeService extends InputMethodService
         gridScroll.setFillViewport(true);
         gridScroll.setVerticalScrollBarEnabled(false);
         gridScroll.setClipToPadding(false);
+        gridScroll.setBackgroundColor(palette.panel);
         gridBoard = new LinearLayout(this);
         gridBoard.setOrientation(LinearLayout.VERTICAL);
         gridScroll.addView(gridBoard, new ViewGroup.LayoutParams(
@@ -662,65 +710,126 @@ public final class PimeImeService extends InputMethodService
         final LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(palette.panel);
+        /* The rail keeps its column to the very bottom, so the delete line
+         * reads as one more table row instead of a separate bar. The foot of
+         * that column is where 首笔画 lives: always in reach, whatever the
+         * syllable list is doing. */
+        final LinearLayout railFoot = new LinearLayout(this);
+        railFoot.setOrientation(LinearLayout.VERTICAL);
+        railFoot.setBackgroundColor(palette.rail);
+        railFootItem = new TextView(this);
+        railFootItem.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        railFootItem.setGravity(Gravity.CENTER);
+        railFootItem.setSingleLine(true);
+        railFootItem.setEllipsize(TextUtils.TruncateAt.END);
+        railFootItem.setTextColor(palette.railText);
+        railFoot.addView(railFootItem, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        final View railFootRule = new View(this);
+        railFootRule.setBackgroundColor(palette.railLine);
+        railFoot.addView(railFootRule, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
+        bar.addView(railFoot, new LinearLayout.LayoutParams(
+                dp(RAIL_WIDTH_DP), ViewGroup.LayoutParams.MATCH_PARENT));
+        final View railFootLine = new View(this);
+        railFootLine.setBackgroundColor(palette.rowLine);
+        bar.addView(railFootLine, new LinearLayout.LayoutParams(
+                Math.max(1, dp(1) / 2), ViewGroup.LayoutParams.MATCH_PARENT));
+
+        final FrameLayout barBody = new FrameLayout(this);
+        bar.addView(barBody, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        final LinearLayout barCells = new LinearLayout(this);
+        barCells.setOrientation(LinearLayout.HORIZONTAL);
+        barBody.addView(barCells, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        /* One column of the grid: the delete key lands where the fifth
+         * candidate of the next row would be, as in WeChat's table. */
+        for (int column = 1; column < CANDIDATE_GRID_COLUMNS; ++column) {
+            barCells.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        }
+        final ImageButton delete = new ImageButton(this);
+        delete.setImageResource(R.drawable.ic_backspace);
+        delete.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        delete.setPadding(dp(17), dp(11), dp(17), dp(11));
+        delete.setImageTintList(ColorStateList.valueOf(palette.keyText));
+        delete.setContentDescription(getString(R.string.ime_action_delete));
+        /* Flat fill, no pill: in the table the key is a cell, not a key face. */
+        final GradientDrawable deleteFill = new GradientDrawable();
+        deleteFill.setColor(palette.keyCap);
+        delete.setBackground(ripple(deleteFill, palette));
+        delete.setOnClickListener(v -> gridDelete());
+        barCells.addView(delete, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        /* Handwriting actions sit on the empty cells left of the delete key. */
+        final LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.setPadding(dp(4), 0, 0, 0);
         handwritingUndo = barAction(R.string.ime_handwriting_undo, palette,
                 v -> handwritingView.undo());
         handwritingClear = barAction(R.string.ime_handwriting_clear, palette,
                 v -> handwritingView.clear());
         handwritingUndo.setVisibility(View.GONE);
         handwritingClear.setVisibility(View.GONE);
-        bar.addView(handwritingUndo, new LinearLayout.LayoutParams(
-                dp(56), dp(GRID_ROW_HEIGHT_DP)));
-        bar.addView(handwritingClear, new LinearLayout.LayoutParams(
-                dp(56), dp(GRID_ROW_HEIGHT_DP)));
-        /* One column of the grid: the delete key lands where the fifth
-         * candidate of the next row would be, as in WeChat's table. */
-        bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1,
-                CANDIDATE_GRID_COLUMNS - 1));
-        final TextView delete = new TextView(this);
-        delete.setText("\u232b");
-        delete.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        delete.setTextColor(palette.keyFuncText);
-        delete.setGravity(Gravity.CENTER);
-        delete.setContentDescription(getString(R.string.ime_action_delete));
-        final GradientDrawable deleteFill = new GradientDrawable();
-        deleteFill.setCornerRadius(dp(14));
-        deleteFill.setColor(palette.keyFunc);
-        delete.setBackground(ripple(deleteFill, palette));
-        delete.setOnClickListener(v -> gridDelete());
-        bar.addView(delete, new LinearLayout.LayoutParams(0, dp(GRID_ROW_HEIGHT_DP), 1f));
+        actions.addView(handwritingUndo, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        actions.addView(handwritingClear, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        barBody.addView(actions, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.START | Gravity.CENTER_VERTICAL));
+
         panel.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_BAR_HEIGHT_DP)));
         renderTabs(palette);
         return panel;
     }
 
+    /** Fold chevron: the strip's and the category line's are the same control. */
+    private ImageButton chevronButton(KeyboardTheme palette) {
+        final ImageButton button = new ImageButton(this);
+        button.setImageResource(R.drawable.ic_expand_more);
+        button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        button.setBackground(candidateChevronBackground(false, palette));
+        button.setImageTintList(ColorStateList.valueOf(palette.hint));
+        button.setPadding(dp(6), dp(6), dp(6), dp(6));
+        button.setContentDescription(getString(R.string.ime_action_expand));
+        return button;
+    }
+
+
     private TextView panelTabView(int label, int tab) {
         final TextView view = new TextView(this);
         view.setText(label);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         view.setGravity(Gravity.CENTER);
         view.setSingleLine(true);
         view.setOnClickListener(v -> selectPanelTab(tab));
         return view;
     }
 
+    /** Handwriting actions: plain text, because the delete cell owns the fill. */
     private TextView barAction(int label, KeyboardTheme palette,
                                View.OnClickListener click) {
         final TextView view = new TextView(this);
         view.setText(label);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         view.setTextColor(palette.keyFuncText);
         view.setGravity(Gravity.CENTER);
         view.setSingleLine(true);
+        view.setPadding(dp(14), 0, dp(14), 0);
         final GradientDrawable fill = new GradientDrawable();
-        fill.setCornerRadius(dp(12));
-        fill.setColor(palette.keyFunc);
+        fill.setCornerRadius(dp(10));
+        fill.setColor(0);
         view.setBackground(ripple(fill, palette));
         view.setOnClickListener(click);
         return view;
     }
 
-    /** Paints the category line; the active tab is the only accent pill. */
+    /** Paints the category line; the active tab is the lighter pill in the track. */
     private void renderTabs(KeyboardTheme palette) {
         final int[] labels = {
                 R.string.ime_tab_frequency,
@@ -732,14 +841,20 @@ public final class PimeImeService extends InputMethodService
             if (tab == null) continue;
             final boolean active = panelTab == i;
             tab.setText(labels[i]);
-            tab.setTextColor(active ? palette.accent : palette.hint);
-            tab.setTypeface(Typeface.create("sans-serif",
-                    active ? Typeface.BOLD : Typeface.NORMAL));
+            tab.setTextColor(active ? palette.tabActiveText : palette.tabText);
+            tab.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            /* The pill is inset inside the tab's share of the track, so the
+             * track still reads as one control with a moving highlight. */
             final GradientDrawable pill = new GradientDrawable();
-            pill.setCornerRadius(dp(13));
-            pill.setColor(active ? palette.accentSoft : 0);
-            tab.setBackground(ripple(pill, palette));
+            pill.setCornerRadius(dp(8));
+            pill.setColor(active ? palette.tabActive : 0);
+            final int inset = dp(3);
+            tab.setBackground(ripple(new InsetDrawable(
+                    pill, inset, inset, inset, inset), palette));
             tab.setSelected(active);
+        }
+        if (panelChevron != null) {
+            panelChevron.setImageTintList(ColorStateList.valueOf(palette.hint));
         }
     }
 
@@ -779,6 +894,10 @@ public final class PimeImeService extends InputMethodService
         }
         if (handwritingClear != null) {
             handwritingClear.setVisibility(handwriting ? View.VISIBLE : View.GONE);
+        }
+        /* 首笔画 filters the table; it has nothing to say to the ink surface. */
+        if (railFootItem != null) {
+            railFootItem.setVisibility(handwriting ? View.GONE : View.VISIBLE);
         }
     }
 
@@ -1610,15 +1729,32 @@ public final class PimeImeService extends InputMethodService
         }
         final boolean unfolded = candidatesExpanded;
         if (expandButton != null) {
-            expandButton.setVisibility(expandable || unfolded
+            /* The open table has its own chevron on the category line, so the
+             * strip's goes away with the strip. */
+            expandButton.setVisibility(expandable && !unfolded
                     ? View.VISIBLE : View.GONE);
+        }
+        if (panelChevron != null) {
+            panelChevron.setVisibility(unfolded ? View.VISIBLE : View.GONE);
         }
         if (candidateScroll != null) {
             candidateScroll.setVisibility(
                     hasCandidates && !unfolded ? View.VISIBLE : View.GONE);
         }
+        if (candidateLine != null) {
+            /* The open table keeps the whole rectangle, including the strip's
+             * line: that is where its category track goes, as in WeChat. */
+            candidateLine.setVisibility(unfolded ? View.GONE : View.VISIBLE);
+        }
         if (candidatePanel != null) {
             candidatePanel.setVisibility(unfolded ? View.VISIBLE : View.GONE);
+            final ViewGroup.LayoutParams params = candidatePanel.getLayoutParams();
+            final int wanted = keyAreaHeight
+                    + (unfolded ? dp(CANDIDATE_ROW_HEIGHT_DP) : 0);
+            if (params != null && params.height != wanted) {
+                params.height = wanted;
+                candidatePanel.setLayoutParams(params);
+            }
         }
         if (keyboard != null) {
             keyboard.setVisibility(unfolded ? View.GONE : View.VISIBLE);
@@ -1823,11 +1959,8 @@ public final class PimeImeService extends InputMethodService
     private void renderRail(KeyboardTheme palette) {
         if (railList == null) return;
         railList.removeAllViews();
+        renderRailFoot(palette);
         if (railMode == RAIL_STROKES) {
-            addRailItem("‹", false, () -> {
-                railMode = RAIL_SYLLABLES;
-                renderRail(palette);
-            });
             addRailItem(getString(R.string.ime_rail_all),
                     railStroke < 0, () -> {
                         railStroke = -1;
@@ -1854,13 +1987,16 @@ public final class PimeImeService extends InputMethodService
             return;
         }
 
-        addRailItem(getString(R.string.ime_rail_all),
-                railSyllable == null && railStroke < 0, () -> {
-                    railSyllable = null;
-                    railStroke = -1;
-                    renderRail(palette);
-                    renderGrid();
-                });
+        /* Unfiltered, the rail starts at the first syllable, like WeChat's;
+         * "全部" only appears once there is a filter to clear. */
+        if (railSyllable != null) {
+            addRailItem(getString(R.string.ime_rail_all), false, () -> {
+                railSyllable = null;
+                railStroke = -1;
+                renderRail(palette);
+                renderGrid();
+            });
+        }
         final HanziData data = HanziData.get(this);
         final java.util.LinkedHashSet<String> syllables = new java.util.LinkedHashSet<>();
         for (GridEntry entry : baseEntries()) {
@@ -1877,37 +2013,86 @@ public final class PimeImeService extends InputMethodService
                 renderGrid();
             });
         }
-        addRailItem(getString(R.string.ime_rail_first_stroke) + " ›",
-                railStroke >= 0, () -> {
-                    railMode = RAIL_STROKES;
-                    renderRail(palette);
-                });
     }
 
-    private void addRailItem(String label, boolean active, Runnable click) {
+    /**
+     * The rail's bottom cell is the 首笔画 door: it opens the stroke buckets, and
+     * while they are open it is the way back. Keeping it out of the scrolling
+     * list means it never scrolls away, as in WeChat's table.
+     */
+    private void renderRailFoot(KeyboardTheme palette) {
+        if (railFootItem == null) return;
+        if (railMode == RAIL_STROKES) {
+            final SpannableStringBuilder text = new SpannableStringBuilder("‹ ");
+            text.setSpan(new ForegroundColorSpan(palette.hint), 0, text.length(),
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            text.append(getString(R.string.ime_rail_first_stroke));
+            railFootItem.setText(text);
+            railFootItem.setTextColor(palette.railText);
+            railFootItem.setOnClickListener(v -> {
+                railMode = RAIL_SYLLABLES;
+                railStroke = -1;
+                renderRail(palette);
+                renderGrid();
+            });
+        } else {
+            railFootItem.setText(strokeRailLabel(palette));
+            railFootItem.setTextColor(palette.railText);
+            railFootItem.setOnClickListener(v -> {
+                railMode = RAIL_STROKES;
+                renderRail(palette);
+            });
+        }
+    }
+
+    /** 首笔画 with the second-level arrow, the arrow a step dimmer. */
+    private CharSequence strokeRailLabel(KeyboardTheme palette) {
+        final SpannableStringBuilder text = new SpannableStringBuilder(
+                getString(R.string.ime_rail_first_stroke));
+        final int from = text.length();
+        text.append(" ›");
+        text.setSpan(new ForegroundColorSpan(palette.hint), from, text.length(),
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return text;
+    }
+
+    /**
+     * One rail cell. It is as tall as a table row and carries the same kind of
+     * hairline at its foot, so the syllable column lines up with the candidates
+     * beside it instead of being a separate list.
+     */
+    private void addRailItem(CharSequence label, boolean active, Runnable click) {
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
+        final LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.VERTICAL);
         final TextView item = new TextView(this);
         item.setText(label);
-        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         item.setGravity(Gravity.CENTER);
         item.setSingleLine(true);
         item.setEllipsize(TextUtils.TruncateAt.END);
-        item.setTextColor(active ? palette.accent : palette.hint);
-        item.setTypeface(Typeface.create("sans-serif",
-                active ? Typeface.BOLD : Typeface.NORMAL));
-        final GradientDrawable pill = new GradientDrawable();
-        pill.setCornerRadius(dp(10));
-        pill.setColor(active ? palette.accentSoft : 0);
-        item.setBackground(ripple(pill, palette));
-        item.setOnClickListener(v -> click.run());
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(RAIL_ITEM_HEIGHT_DP));
-        params.setMargins(dp(4), dp(2), dp(4), dp(2));
-        railList.addView(item, params);
+        item.setTextColor(active ? palette.tabActiveText : palette.railText);
+        cell.addView(item, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        final View line = new View(this);
+        line.setBackgroundColor(palette.railLine);
+        cell.addView(line, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
+        final GradientDrawable fill = new GradientDrawable();
+        fill.setColor(active ? palette.tabActive : 0);
+        cell.setBackground(ripple(fill, palette));
+        cell.setOnClickListener(v -> click.run());
+        railList.addView(cell, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_ROW_HEIGHT_DP)));
     }
 
-    /** Lays the visible candidates out five to a row, in chain order. */
+    /**
+     * Lays the visible candidates out five to a row, in chain order. Each row
+     * is a block: the cells, then a hairline. Only existing candidates get a
+     * cell, so a short row spreads across the full width the way WeChat's
+     * table does, and the line under it keeps the rail and the table in step.
+     */
     private void renderGrid() {
         if (gridBoard == null) return;
         final KeyboardTheme palette = inputPalette != null
@@ -1928,40 +2113,50 @@ public final class PimeImeService extends InputMethodService
             return;
         }
         final int columns = CANDIDATE_GRID_COLUMNS;
+        final int line = Math.max(1, dp(1) / 2);
         for (int start = 0; start < entries.size(); start += columns) {
+            final LinearLayout block = new LinearLayout(this);
+            block.setOrientation(LinearLayout.VERTICAL);
             final LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             for (int column = 0; column < columns; ++column) {
                 final int at = start + column;
-                final View cell = at < entries.size()
-                        ? gridCell(entries.get(at), at, palette) : new View(this);
-                row.addView(cell, new LinearLayout.LayoutParams(
-                        0, dp(GRID_ROW_HEIGHT_DP), 1f));
+                if (at >= entries.size()) break;
+                row.addView(gridCell(entries.get(at), at, palette),
+                        new LinearLayout.LayoutParams(0,
+                                ViewGroup.LayoutParams.MATCH_PARENT, 1f));
             }
-            gridBoard.addView(row, new LinearLayout.LayoutParams(
+            block.addView(row, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            final View foot = new View(this);
+            foot.setBackgroundColor(palette.rowLine);
+            block.addView(foot, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, line));
+            gridBoard.addView(block, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(GRID_ROW_HEIGHT_DP)));
         }
         if (gridScroll != null) gridScroll.scrollTo(0, 0);
     }
 
-    /** Table cell: same emphasis as the strip's first item, evenly spread. */
+    /**
+     * Table cell: one candidate, centred in its share of the row. The table is
+     * a list to tap, not a place where the first row is pre-selected, so no
+     * cell is painted as the answer until it is picked.
+     */
     private View gridCell(GridEntry entry, int position, KeyboardTheme palette) {
         final TextView item = new TextView(this);
-        final boolean first = position == 0;
         item.setText(entry.text);
-        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, first ? 19 : 18);
-        item.setTextColor(first ? palette.accent : palette.candidateText);
-        item.setTypeface(Typeface.create("sans-serif",
-                first ? Typeface.BOLD : Typeface.NORMAL));
+        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        item.setTextColor(palette.candidateText);
+        item.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         item.setGravity(Gravity.CENTER);
         item.setSingleLine(true);
         item.setEllipsize(TextUtils.TruncateAt.END);
-        item.setPadding(dp(4), 0, dp(4), 0);
-        final GradientDrawable pill = new GradientDrawable();
-        pill.setCornerRadius(dp(16));
-        pill.setColor(first ? palette.accentSoft : 0);
-        item.setBackground(ripple(pill, palette));
+        item.setPadding(dp(2), 0, dp(2), 0);
+        final GradientDrawable fill = new GradientDrawable();
+        fill.setColor(0);
+        item.setBackground(ripple(fill, palette));
         item.setOnClickListener(v -> pickEntry(entry));
         return item;
     }
