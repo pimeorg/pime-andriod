@@ -39,7 +39,9 @@ android {
         externalNativeBuild {
             cmake {
                 arguments "-DPIME_CORE_DIR=" + pimeCoreDir.absolutePath,
-                        "-DPIME_SPEECH_PLUGIN_DIR=" + speechPluginDir.absolutePath
+                        "-DPIME_SPEECH_PLUGIN_DIR=" + speechPluginDir.absolutePath,
+                        "-DPIME_PROFILE_TIMING=" + (project.findProperty(
+                                "pimeProfileTiming") ?: "OFF")
                 cppFlags "-std=c++20"
             }
         }

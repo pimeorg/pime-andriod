@@ -1579,3 +1579,37 @@ translate 3.5 ms、rank 8.7 ms、format 6.0 ms；`woshizhongguoren` 13.1 ms/次�
   640 条候选的工作区帧。候选数量偏好（3/5/7/9）只影响显示窗口，不会减少链的
   计算量。
 - 尚未在 arm64 物理设备上测延迟。
+
+### 按键延迟第二轮：候选预算、单字索引与直配池（2026-11-17）
+
+全链每次按键仍固定产出 640 条候选，15 个下游插件每帧都要解码 52 KB 的候选
+工作区；translate 首次字母要扫完整桶、双字母要在大列表里做有序插入。
+
+- **候选预算随显示形态变化**：`pime_context` 末尾追加 `max_candidates`
+  （按 `offsetof` 判断旧结构体，ABI 兼容），新增
+  `pime_core_candidate_budget()` 只更新 `frame.context` 不派发事件。
+  折叠条只要 64 条，展开面板才要 640 条，切面板不额外跑链。
+  折叠态工作区帧 52 KB → 约 6 KB，下游 15 个插件的整帧解码约
+  70 ms → 12 ms；单键整体从约 276 ms 降到 20–25 ms。
+- **单字母快速路径**：加载时按词频降序建单音节索引 `g_single_idx`，
+  `s` 这类输入只遍历该桶的单音节条目（约 2k），不再逐条比较
+  `syllables`；`s` 的 translate 从 50–130 ms 降到 1–3 ms。
+- **后缀可达性剪枝**：`g_cover[i]` 表示 `g_input[i..]` 能否切成音节前缀，
+  不可达的起点直接跳过整个桶；`ni` 的 translate 约 1.5 ms。
+- **直配表改为池 + 一次归并排序**：词表按音节分组而不是按词频排序，
+  `record_direct` 向 640 槽有序表插入时，`sh` 一次按键要搬 33 万条。
+  现在用哈希表去重（槽位存池下标）、无序遍历入池，`compose` 末尾按
+  `(score desc, seq asc)` 归并排序后截取前 640，并列顺序与原来的稳定
+  插入完全一致。设备插桩实测 `sh` 的 compose+候选构建 6 ms（此前同口径
+  41–74 ms），其中建边 5 ms、束搜索不足 1 ms。
+- **验证**：core `ctest` 全过；插件 `ctest` 284/284；`assembleRelease`
+  与 `testDebugUnitTest` 通过。MuMu 上 `s`、`sh`、`n` 的候选条与词频顺序
+  与改动前一致，`sh` 首位仍是「是」。
+- **实测**（MuMu 12 / 19 插件链 / 折叠态 64 条 / `-PpimeProfileTiming=ON`）：
+  `s` 的 translate 1.85 ms、rank 0.8 ms、format 1.1 ms，整链各插件合计约
+  10.3 ms；`sh` 的 translate 6.6 ms、rank 1.6 ms，整链合计约 17.9 ms
+  （此前同口径 `sh` 单键 276 ms、translate 41–74 ms）。translate 输入帧
+  768 B、输出 2.6 KB，下游帧约 6 KB（此前 52 KB）。
+- 插桩（`host_time`/`host_log`/计数器）已全部移除，插件 wasm 从 49 KB
+  回到 43.6 KB，manifest 能力恢复为 `[workspace, asset.read, output.emit]`；
+  设备上最终安装的是未开 `PIME_PROFILE_TIMING` 的 release 包。

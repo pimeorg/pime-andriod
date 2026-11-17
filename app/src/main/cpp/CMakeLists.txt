@@ -12,6 +12,12 @@ if(NOT EXISTS "${PIME_CORE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "pime-core not found at ${PIME_CORE_DIR} (pass -DPIME_CORE_DIR=...)")
 endif()
 
+option(PIME_PROFILE_TIMING "Log per-plugin chain timing (benchmark builds)" OFF)
+if(PIME_PROFILE_TIMING)
+    add_compile_definitions(PIME_PROFILE_TIMING=1)
+    message(STATUS "PIME_PROFILE_TIMING enabled: per-plugin timing to logcat")
+endif()
+
 option(PIME_ENABLE_WASM "Build the WAMR WASM plugin runtime" ON)
 set(PIME_WAMR_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/wamr"
     CACHE PATH "wasm-micro-runtime source")

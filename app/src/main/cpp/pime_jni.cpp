@@ -570,7 +570,8 @@ JNIEXPORT jint JNICALL
 Java_com_pimeorg_pime_PimeCore_nativeContext(JNIEnv* env, jobject, jlong session,
                                          jstring app_id, jint field_type,
                                          jint input_type, jstring locale,
-                                         jint page_size, jint host_caps) {
+                                         jint page_size, jint host_caps,
+                                         jint max_candidates) {
     pime_session* value = session_of(session);
     if (!value) return PIME_INVALID;
     const std::string app = from_jstring(env, app_id);
@@ -586,7 +587,19 @@ Java_com_pimeorg_pime_PimeCore_nativeContext(JNIEnv* env, jobject, jlong session
     context.locale_len = static_cast<uint32_t>(loc.size());
     context.page_size = static_cast<uint32_t>(page_size);
     context.host_caps = static_cast<uint32_t>(host_caps);
+    context.max_candidates = max_candidates < 0
+                                 ? 0u
+                                 : static_cast<uint32_t>(max_candidates);
     return static_cast<jint>(pime_core_context(value, &context));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_pimeorg_pime_PimeCore_nativeCandidateBudget(JNIEnv*, jobject,
+                                                 jlong session, jint budget) {
+    pime_session* value = session_of(session);
+    if (!value) return PIME_INVALID;
+    return static_cast<jint>(pime_core_candidate_budget(
+        value, budget < 0 ? 0u : static_cast<uint32_t>(budget)));
 }
 
 JNIEXPORT jint JNICALL

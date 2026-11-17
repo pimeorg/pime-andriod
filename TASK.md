@@ -235,3 +235,11 @@
       均提交正确；面板词频网格与音节侧栏正常
 - [ ] arm64 物理设备上测 640 候选的实际按键延迟（模拟器上 `sh` 约 0.6 s，
       主要是 15 个下游插件重复读取携带 640 条候选的 53 KB 工作区帧）
+- [x] 折叠/展开候选预算：`pime_context.max_candidates` + 无派发
+      `pime_core_candidate_budget()`；折叠 64、展开 640，帧 52 KB → 6 KB，
+      下游整帧解码 70 ms → 12 ms
+- [x] translate 单字母快速路径（单音节索引）与后缀可达性剪枝（`g_cover`）
+- [x] 整串直配表改为哈希去重 + 池 + 一次归并排序（`sh` 的 33 万次搬移消失）
+- [x] 验证：core/plugin ctest、`assembleRelease testDebugUnitTest` 全过；
+      MuMu 实测 `s`/`sh`/`n` 候选正确
+- [ ] arm64 物理设备上复测折叠态单键延迟

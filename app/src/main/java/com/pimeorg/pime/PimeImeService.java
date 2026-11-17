@@ -106,6 +106,13 @@ public final class PimeImeService extends InputMethodService
      */
     private static final int CANDIDATE_PAGE_SIZE = 640;
     /**
+     * Candidates built for the folded strip. Typing pays for every candidate
+     * the chain produces (building, ranking, CBOR, and re-decoding in the
+     * fourteen downstream plugins), so the strip asks for a display-sized
+     * list; opening the table asks for {@link #CANDIDATE_PAGE_SIZE} again.
+     */
+    private static final int CANDIDATE_FOLDED_SIZE = 64;
+    /**
      * Loop bound while collecting pages / restoring the strip. The real stop
      * condition is "the chain stopped moving or repeated a page"; this only
      * keeps a misbehaving chain from spinning forever. It is not a candidate
@@ -209,6 +216,8 @@ public final class PimeImeService extends InputMethodService
     private int[] compositionStarts = new int[0];
     private int[] compositionEnds = new int[0];
     private final List<String> candidates = new ArrayList<>();
+    /** Candidate count the next chain run builds; see CANDIDATE_FOLDED_SIZE. */
+    private int candidateBudget = CANDIDATE_FOLDED_SIZE;
     /**
      * First candidate the folded strip draws when the preference caps it at
      * 3/5/7/9. The chain hands over its whole list in one page, so paging the
@@ -1170,8 +1179,8 @@ public final class PimeImeService extends InputMethodService
                 | PimeCore.HOST_SECURE | PimeCore.HOST_SURROUNDING
                 | PimeCore.HOST_AUDIO_CAPTURE;
         report(core.context(app, fieldType(attribute.inputType),
-                PimeCore.INPUT_KEYBOARD, "zh_CN", CANDIDATE_PAGE_SIZE, hostCaps),
-                "context");
+                PimeCore.INPUT_KEYBOARD, "zh_CN", CANDIDATE_PAGE_SIZE, hostCaps,
+                candidateBudget), "context");
         report(core.secure(password), "secure");
         report(core.focus(true), "focus");
     }
@@ -1628,6 +1637,8 @@ public final class PimeImeService extends InputMethodService
         if (!candidatesExpanded && candidates.isEmpty() && composition.isEmpty()) return;
         candidatesExpanded = !candidatesExpanded;
         if (candidatesExpanded) {
+            /* The table shows everything the chain can produce. */
+            applyCandidateBudget(CANDIDATE_PAGE_SIZE);
             gridReturnPage = chainPage;
             final KeyboardTheme palette = inputPalette != null
                     ? inputPalette : KeyboardTheme.of(this);
@@ -1640,9 +1651,23 @@ public final class PimeImeService extends InputMethodService
             }
         } else {
             foldGrid();
+            /* Back to typing: the next chain run is display-sized again. */
+            applyCandidateBudget(CANDIDATE_FOLDED_SIZE);
         }
         updateExpandButton();
         updateCandidateRow();
+    }
+
+    /**
+     * Changes the candidate count translate plugins build on the next chain
+     * run without dispatching an event of its own: only the frame context of
+     * the following key/page event changes.
+     */
+    private void applyCandidateBudget(int budget) {
+        if (candidateBudget == budget) return;
+        candidateBudget = budget;
+        if (coreReady && core.hasSession())
+            report(core.setCandidateBudget(budget), "budget");
     }
 
     /**
@@ -2082,6 +2107,7 @@ public final class PimeImeService extends InputMethodService
         /* The handwriting surface is not tied to a candidate list: a chain
          * "hide" while it is up must not fold the tab away. */
         if (panelTab != TAB_HANDWRITING) candidatesExpanded = false;
+        applyCandidateBudget(CANDIDATE_FOLDED_SIZE);
         chainPage = 0;
         gridReturnPage = 0;
         gridPages.clear();

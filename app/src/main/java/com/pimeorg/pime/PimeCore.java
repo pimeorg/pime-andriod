@@ -197,10 +197,20 @@ public final class PimeCore {
     }
 
     public int context(String appId, int fieldType, int inputType, String locale,
-                       int pageSize, int hostCaps) {
+                       int pageSize, int hostCaps, int maxCandidates) {
         if (session == 0) return -1;
         return nativeContext(session, appId, fieldType, inputType, locale,
-                pageSize, hostCaps);
+                pageSize, hostCaps, maxCandidates);
+    }
+
+    /**
+     * Sets how many candidates translate plugins build for the next chain run.
+     * 0 restores the plugin's configured maximum. Does not dispatch an event,
+     * so toggling the candidate table stays free of an extra chain run.
+     */
+    public int setCandidateBudget(int maxCandidates) {
+        if (session == 0) return -1;
+        return nativeCandidateBudget(session, maxCandidates);
     }
 
     public int focus(boolean focused) {
@@ -338,7 +348,9 @@ public final class PimeCore {
 
     private native int nativeContext(long session, String appId, int fieldType,
                                      int inputType, String locale, int pageSize,
-                                     int hostCaps);
+                                     int hostCaps, int maxCandidates);
+
+    private native int nativeCandidateBudget(long session, int maxCandidates);
 
     private native int nativeFocus(long session, boolean focused);
 
