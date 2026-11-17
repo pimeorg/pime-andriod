@@ -105,13 +105,15 @@
     <string name="theme_dark">深色</string>
     <string name="row_toolbar">工具栏</string>
     <string name="row_toolbar_desc">已显示 %1$d 个按钮，可启停与排序</string>
-    <string name="toolbar_note">工具栏在候选栏上方，图标从左到右按这里的顺序排列。点按图标执行动作，长按图标也能回到这个页面（语音键除外，那里长按就是说话）；把工具全部关闭，工具栏就会收起，把位置让给键盘。</string>
+    <string name="toolbar_note">工具栏在候选栏上方，图标从左到右按这里的顺序排列。长按每行的拖动把手即可调整顺序；点按图标执行动作，长按图标也能回到这个页面（语音键除外，那里长按就是说话）；把工具全部关闭，工具栏就会收起，把位置让给键盘。</string>
     <string name="toolbar_enabled">已启用（%1$d）</string>
     <string name="toolbar_disabled">未启用（%1$d）</string>
     <string name="toolbar_empty">还没有启用任何工具。用下面的开关添加。</string>
     <string name="toolbar_reset">恢复默认</string>
     <string name="toolbar_reset_desc">符号、粘贴、设置、收起，按默认顺序</string>
     <string name="toolbar_reset_done">工具栏已恢复默认</string>
+    <string name="toolbar_drag_hint">长按拖动调整顺序</string>
+    <string name="toolbar_order_changed">工具栏顺序已更新</string>
     <string name="tool_on">已添加「%1$s」到工具栏</string>
     <string name="tool_off">已从工具栏移除「%1$s」</string>
     <string name="tool_symbols">符号键盘</string>

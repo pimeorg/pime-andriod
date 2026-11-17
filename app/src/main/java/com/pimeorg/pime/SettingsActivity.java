@@ -17,6 +17,7 @@ import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.TypefaceSpan;
 import android.util.TypedValue;
+import android.view.DragEvent;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -97,6 +98,24 @@ public final class SettingsActivity extends AppCompatActivity {
             java.util.concurrent.Executors.newSingleThreadExecutor();
     /** Plugin whose settings panel is open on the chain page; null when none. */
     private String expandedPluginId;
+
+    /** The enabled tools on the open toolbar page, reordered live while one is dragged. */
+    private List<ToolDragItem> toolbarDragItems;
+    /** The order the drag began in, so a drop outside the card can be undone. */
+    private List<ToolDragItem> toolbarDragStart;
+    /** The tool being dragged, or null when no drag is in flight. */
+    private ToolDragItem toolbarDragItem;
+
+    /** One enabled tool on the toolbar page: its id and the row that shows it. */
+    private static final class ToolDragItem {
+        final String id;
+        final LinearLayout row;
+
+        ToolDragItem(String id, LinearLayout row) {
+            this.id = id;
+            this.row = row;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -1314,6 +1333,10 @@ public final class SettingsActivity extends AppCompatActivity {
             final List<String> enabled = Prefs.toolbarTools(this);
             addGroupTitle(parent, getString(R.string.toolbar_enabled, enabled.size()));
             final LinearLayout onCard = addCard(parent);
+            toolbarDragItems = new ArrayList<>();
+            toolbarDragStart = null;
+            toolbarDragItem = null;
+            onCard.setOnDragListener(this::onToolDrag);
             if (enabled.isEmpty()) {
                 final TextView empty = text(getString(R.string.toolbar_empty), 14, false,
                         attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
@@ -1324,7 +1347,9 @@ public final class SettingsActivity extends AppCompatActivity {
             }
             for (int i = 0; i < enabled.size(); i++) {
                 if (i > 0) addDivider(onCard);
-                addToolRow(onCard, enabled.get(i), i, enabled.size(), true);
+                final String id = enabled.get(i);
+                final LinearLayout row = addToolRow(onCard, id, true);
+                toolbarDragItems.add(new ToolDragItem(id, row));
             }
 
             final List<String> disabled = new ArrayList<>();
@@ -1336,7 +1361,7 @@ public final class SettingsActivity extends AppCompatActivity {
                 final LinearLayout offCard = addCard(parent);
                 for (int i = 0; i < disabled.size(); i++) {
                     if (i > 0) addDivider(offCard);
-                    addToolRow(offCard, disabled.get(i), -1, enabled.size(), false);
+                    addToolRow(offCard, disabled.get(i), false);
                 }
             }
 
@@ -1350,21 +1375,43 @@ public final class SettingsActivity extends AppCompatActivity {
         });
     }
 
-    /** One tool on the customization page: icon, name, order arrows, switch. */
-    private void addToolRow(LinearLayout parent, String id, int index, int count,
-                            boolean enabled) {
+    /** One tool on the customization page: handle, icon, name, switch. */
+    private LinearLayout addToolRow(LinearLayout parent, String id, boolean enabled) {
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setMinimumHeight(dp(68));
         row.setPadding(dp(16), dp(8), dp(8), dp(8));
 
+        /* A handle leads the row: long-pressing it picks the tool up, and the
+         * card's drag listener moves it to wherever the finger settles. The
+         * switch stays a plain tap, so the two actions never compete. Disabled
+         * tools have no order to move, so they skip the handle. */
+        if (enabled) {
+            final ImageView handle = new ImageView(this);
+            handle.setImageResource(R.drawable.ic_drag);
+            handle.setImageTintList(ColorStateList.valueOf(
+                    attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+            handle.setContentDescription(getString(R.string.toolbar_drag_hint));
+            handle.setClickable(true);
+            handle.setFocusable(true);
+            final TypedValue ripple = new TypedValue();
+            getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,
+                    ripple, true);
+            handle.setBackgroundResource(ripple.resourceId);
+            handle.setOnLongClickListener(v -> startToolDrag(id, row));
+            row.addView(handle, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        }
+
         final ImageView icon = new ImageView(this);
         icon.setImageResource(ImeToolbar.iconRes(id));
         icon.setImageTintList(ColorStateList.valueOf(
                 attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
         icon.setContentDescription(null);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        final LinearLayout.LayoutParams iconParams =
+                new LinearLayout.LayoutParams(dp(24), dp(24));
+        if (enabled) iconParams.setMarginStart(dp(8));
+        row.addView(icon, iconParams);
 
         final LinearLayout lines = new LinearLayout(this);
         lines.setOrientation(LinearLayout.VERTICAL);
@@ -1379,17 +1426,6 @@ public final class SettingsActivity extends AppCompatActivity {
         lines.addView(text(getString(ImeToolbar.descriptionRes(id)), 13, false,
                 attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
 
-        if (enabled) {
-            final ImageView up = arrowButton(R.drawable.ic_arrow_up,
-                    getString(R.string.action_move_up_named, title), index != 0,
-                    () -> moveTool(id, -1));
-            final ImageView down = arrowButton(R.drawable.ic_arrow_down,
-                    getString(R.string.action_move_down_named, title), index != count - 1,
-                    () -> moveTool(id, 1));
-            row.addView(up, new LinearLayout.LayoutParams(dp(36), dp(36)));
-            row.addView(down, new LinearLayout.LayoutParams(dp(36), dp(36)));
-        }
-
         final MaterialSwitch toggle = new MaterialSwitch(this);
         toggle.setChecked(enabled);
         toggle.setContentDescription(title);
@@ -1401,6 +1437,109 @@ public final class SettingsActivity extends AppCompatActivity {
 
         parent.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
+    }
+
+    /**
+     * Picks an enabled tool up for a drag. The card reorders its rows as the
+     * finger crosses them; nothing is written until the drag ends on the card.
+     */
+    private boolean startToolDrag(String id, LinearLayout row) {
+        if (toolbarDragItems == null) return false;
+        for (ToolDragItem item : toolbarDragItems) {
+            if (item.id.equals(id)) {
+                toolbarDragItem = item;
+                toolbarDragStart = new ArrayList<>(toolbarDragItems);
+                row.startDragAndDrop(null, new View.DragShadowBuilder(row), null, 0);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Reorders the enabled tools while a drag is in flight. The card is re-laid
+     * out on every swap, so the row follows the finger; a drop outside the card
+     * puts the rows back where the drag started.
+     */
+    private boolean onToolDrag(View view, DragEvent event) {
+        if (toolbarDragItems == null || toolbarDragItem == null) return false;
+        final LinearLayout card = (LinearLayout) view;
+        switch (event.getAction()) {
+            case DragEvent.ACTION_DRAG_STARTED:
+                // The dragged row is the drag shadow; fade the copy left in the
+                // list so the picked-up one reads as the one that moved.
+                toolbarDragItem.row.setAlpha(0.75f);
+                return true;
+            case DragEvent.ACTION_DRAG_LOCATION: {
+                final int from = toolbarDragItems.indexOf(toolbarDragItem);
+                final int to = nearestToolRow(toolbarDragItems, from, Math.round(event.getY()));
+                if (to != from) {
+                    toolbarDragItems.remove(from);
+                    toolbarDragItems.add(to, toolbarDragItem);
+                    layoutToolCard(card, toolbarDragItems);
+                }
+                return true;
+            }
+            case DragEvent.ACTION_DRAG_ENDED: {
+                final boolean onCard = event.getX() >= 0 && event.getY() >= 0
+                        && event.getX() <= card.getWidth()
+                        && event.getY() <= card.getHeight();
+                if (onCard && !toolbarDragItems.equals(toolbarDragStart)) {
+                    final List<String> order = new ArrayList<>();
+                    for (ToolDragItem item : toolbarDragItems) order.add(item.id);
+                    Prefs.setToolbarTools(this, order);
+                    broadcastDisplayChanged();
+                    snack(getString(R.string.toolbar_order_changed));
+                } else {
+                    toolbarDragItems = new ArrayList<>(toolbarDragStart);
+                    layoutToolCard(card, toolbarDragItems);
+                }
+                toolbarDragItem.row.setAlpha(1f);
+                // The drag took over the touch stream, so the handle never saw
+                // ACTION_UP and would otherwise stay visibly pressed.
+                for (int i = 0; i < toolbarDragItem.row.getChildCount(); i++) {
+                    toolbarDragItem.row.getChildAt(i).setPressed(false);
+                }
+                // The card already shows the final order, so the list stays for
+                // the next drag; only the drag itself is cleared.
+                toolbarDragStart = null;
+                toolbarDragItem = null;
+                return true;
+            }
+            default:
+                return true;
+        }
+    }
+
+    /**
+     * The row whose midpoint is closest to the finger. The dragged row counts
+     * as a candidate, so once it lands beside the finger it wins the tie and the
+     * swap settles instead of rocking back and forth.
+     */
+    private int nearestToolRow(List<ToolDragItem> items, int dragIndex, int y) {
+        int best = dragIndex;
+        int bestDistance = Integer.MAX_VALUE;
+        for (int i = 0; i < items.size(); i++) {
+            final LinearLayout row = items.get(i).row;
+            final int midpoint = row.getTop() + row.getHeight() / 2;
+            final int distance = Math.abs(midpoint - y);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    /** Re-lays the card in the given order, moving the row views as they are. */
+    private void layoutToolCard(LinearLayout card, List<ToolDragItem> items) {
+        card.removeAllViews();
+        for (int i = 0; i < items.size(); i++) {
+            card.addView(items.get(i).row, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            if (i != items.size() - 1) addDivider(card);
+        }
     }
 
     /** Switching on appends the tool; switching off keeps the others' order. */
@@ -1415,18 +1554,6 @@ public final class SettingsActivity extends AppCompatActivity {
         broadcastDisplayChanged();
         snack(getString(enabled ? R.string.tool_on : R.string.tool_off,
                 getString(ImeToolbar.labelRes(id))));
-        rebuildDetail();
-    }
-
-    private void moveTool(String id, int direction) {
-        final List<String> tools = Prefs.toolbarTools(this);
-        final int from = tools.indexOf(id);
-        final int to = from + direction;
-        if (from < 0 || to < 0 || to >= tools.size()) return;
-        tools.remove(from);
-        tools.add(to, id);
-        Prefs.setToolbarTools(this, tools);
-        broadcastDisplayChanged();
         rebuildDetail();
     }
 
