@@ -258,3 +258,7 @@
       `⌃` 收起回键盘；截图 `screenshots/candidates_table_{light,dark}.png`
 - [x] 修复设置页“是否已切换”误判：API 34+ 框架接口返回他法时回退比对
       `Settings.Secure.DEFAULT_INPUT_METHOD`
+- [x] 候选栏与候选面板不再省略长词：表格按文本实测宽度分格（一行最多 5 个，
+      放不下换行），整行都放不下的词独占一行并缩小字号；折叠条显式
+      `setEllipsize(null)`，长词完整显示、横向滚动查看；MuMu 实测 6 字中文
+      候选与 28 字母英文候选完整显示，`shi` 仍为 5 列观感，点选提交正确

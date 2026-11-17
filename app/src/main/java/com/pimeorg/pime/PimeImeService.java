@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
@@ -124,6 +125,12 @@ public final class PimeImeService extends InputMethodService
      */
     private static final int GRID_PAGE_GUARD = 1000;
     private static final int GRID_ROW_HEIGHT_DP = 48;
+    /** Table cell text size; the cell width is measured from it. */
+    private static final float GRID_TEXT_SIZE_SP = 20f;
+    /** Floor for a word wider than the whole row; it shrinks, never truncates. */
+    private static final float GRID_MIN_TEXT_SIZE_SP = 10f;
+    /** Horizontal breathing room inside a table cell, each side. */
+    private static final int GRID_CELL_PADDING_DP = 6;
     /**
      * pime key codes the keymap plugin turns into page moves: `home` rewinds to
      * the first page, which lets the table be collected in one sweep.
@@ -168,6 +175,10 @@ public final class PimeImeService extends InputMethodService
     /** Rows of the table; the ScrollView above it does the scrolling. */
     private LinearLayout gridBoard;
     private ScrollView gridScroll;
+    /** Measures candidate text so a table cell can be as wide as its word. */
+    private Paint gridMeasurePaint;
+    /** Width the current rows were laid out for; a layout change re-renders. */
+    private int gridRenderedWidth;
     private boolean candidatesExpanded;
     /** Height of the key rectangle the panel takes over when unfolded. */
     private int keyAreaHeight;
@@ -695,6 +706,17 @@ public final class PimeImeService extends InputMethodService
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         gridArea.addView(gridScroll, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        /* Rows are sized from the table's measured width; if the first render
+         * happened before layout (or the window width changed), redo it once
+         * the real width is known. */
+        gridScroll.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                              oldLeft, oldTop, oldRight, oldBottom) -> {
+            final int width = right - left;
+            if (width > 0 && width != gridRenderedWidth
+                    && candidatesExpanded && panelTab != TAB_HANDWRITING) {
+                renderGrid();
+            }
+        });
 
         handwritingArea = new LinearLayout(this);
         handwritingArea.setOrientation(LinearLayout.VERTICAL);
@@ -2120,16 +2142,23 @@ public final class PimeImeService extends InputMethodService
     }
 
     /**
-     * Lays the visible candidates out five to a row, in chain order. Each row
-     * is a block: the cells, then a hairline. Only existing candidates get a
-     * cell, so a short row spreads across the full width the way WeChat's
-     * table does, and the line under it keeps the rail and the table in step.
+     * Lays the visible candidates out in rows of at most
+     * {@link #CANDIDATE_GRID_COLUMNS}, in chain order. Each row is a block:
+     * the cells, then a hairline.
+     *
+     * <p>Cells are sized by their text, not by an equal share of the row. A
+     * long word takes the width it needs, its short neighbours keep their own,
+     * and whatever the row has left over is spread evenly. A row therefore
+     * holds fewer candidates when they are wide, and a word wider than the
+     * whole row gets a line to itself at a reduced size. Nothing is ever
+     * ellipsized: every candidate the table shows is readable in full.
      */
     private void renderGrid() {
         if (gridBoard == null) return;
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
         gridBoard.removeAllViews();
+        gridRenderedWidth = gridContentWidth();
         final List<GridEntry> entries = visibleEntries();
         if (entries.isEmpty()) {
             final TextView empty = new TextView(this);
@@ -2144,21 +2173,52 @@ public final class PimeImeService extends InputMethodService
             if (gridScroll != null) gridScroll.scrollTo(0, 0);
             return;
         }
+        final int available = gridRenderedWidth;
         final int columns = CANDIDATE_GRID_COLUMNS;
+        final int[] naturalWidths = new int[columns];
         final int line = Math.max(1, dp(1) / 2);
-        for (int start = 0; start < entries.size(); start += columns) {
+        int at = 0;
+        while (at < entries.size()) {
+            int count = 0;
+            int natural = 0;
+            /* Fill the row with as many whole words as fit; the first one is
+             * always taken, even when it is wider than the row. */
+            while (at + count < entries.size() && count < columns) {
+                final int width = (int) Math.ceil(
+                        gridCellWidth(entries.get(at + count).text));
+                if (count > 0 && natural + width > available) break;
+                naturalWidths[count] = width;
+                natural += width;
+                ++count;
+            }
             final LinearLayout block = new LinearLayout(this);
             block.setOrientation(LinearLayout.VERTICAL);
             final LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            for (int column = 0; column < columns; ++column) {
-                final int at = start + column;
-                if (at >= entries.size()) break;
-                row.addView(gridCell(entries.get(at), at, palette),
-                        new LinearLayout.LayoutParams(0,
-                                ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+            final int extra = Math.max(0, available - natural);
+            final int share = extra / count;
+            int remainder = extra % count;
+            for (int column = 0; column < count; ++column) {
+                final GridEntry entry = entries.get(at + column);
+                int width = naturalWidths[column] + share;
+                if (remainder > 0) {
+                    ++width;
+                    --remainder;
+                }
+                float textSize = GRID_TEXT_SIZE_SP;
+                if (width > available) {
+                    /* One word wider than the row: shrink the text instead of
+                     * cutting the word off. */
+                    textSize = Math.max(GRID_MIN_TEXT_SIZE_SP,
+                            GRID_TEXT_SIZE_SP * available / natural);
+                    width = available;
+                }
+                row.addView(gridCell(entry, at + column, palette, textSize),
+                        new LinearLayout.LayoutParams(
+                                width, ViewGroup.LayoutParams.MATCH_PARENT));
             }
+            at += count;
             block.addView(row, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
             final View foot = new View(this);
@@ -2172,20 +2232,49 @@ public final class PimeImeService extends InputMethodService
     }
 
     /**
-     * Table cell: one candidate, centred in its share of the row. The table is
-     * a list to tap, not a place where the first row is pre-selected, so no
-     * cell is painted as the answer until it is picked.
+     * Width one table cell needs for its word, padding included. The row
+     * builder uses it to decide how many candidates fit side by side.
      */
-    private View gridCell(GridEntry entry, int position, KeyboardTheme palette) {
+    private float gridCellWidth(String text) {
+        if (gridMeasurePaint == null) {
+            gridMeasurePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            gridMeasurePaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        }
+        gridMeasurePaint.setTextSize(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_SP, GRID_TEXT_SIZE_SP,
+                getResources().getDisplayMetrics()));
+        return gridMeasurePaint.measureText(text) + dp(2 * GRID_CELL_PADDING_DP);
+    }
+
+    /**
+     * Width a table row has to work with. Before the first layout the scroll
+     * view has no width yet, so the screen less the fixed rail stands in for
+     * it; {@link #gridScroll}'s layout listener re-renders if the two differ.
+     */
+    private int gridContentWidth() {
+        if (gridScroll != null && gridScroll.getWidth() > 0) return gridScroll.getWidth();
+        return Math.max(dp(1), getResources().getDisplayMetrics().widthPixels
+                - dp(RAIL_WIDTH_DP) - Math.max(1, dp(1) / 2));
+    }
+
+    /**
+     * Table cell: one candidate, centred in the width its word earned. The
+     * table is a list to tap, not a place where the first row is pre-selected,
+     * so no cell is painted as the answer until it is picked.
+     */
+    private View gridCell(GridEntry entry, int position, KeyboardTheme palette,
+                          float textSizeSp) {
         final TextView item = new TextView(this);
         item.setText(entry.text);
-        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp);
         item.setTextColor(palette.candidateText);
         item.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         item.setGravity(Gravity.CENTER);
         item.setSingleLine(true);
-        item.setEllipsize(TextUtils.TruncateAt.END);
-        item.setPadding(dp(2), 0, dp(2), 0);
+        /* No ellipsis, ever: renderGrid measured the word and gave the cell
+         * that width (shrinking the text when a single word outgrew the row). */
+        item.setEllipsize(null);
+        item.setPadding(dp(GRID_CELL_PADDING_DP), 0, dp(GRID_CELL_PADDING_DP), 0);
         final GradientDrawable fill = new GradientDrawable();
         fill.setColor(0);
         item.setBackground(ripple(fill, palette));
@@ -2353,7 +2442,10 @@ public final class PimeImeService extends InputMethodService
     private TextView candidateItem(KeyboardTheme palette) {
         final TextView item = new TextView(this);
         item.setGravity(Gravity.CENTER);
+        /* One line, but never shortened: the strip scrolls sideways, so a long
+         * word keeps its full width and stays readable end to end. */
         item.setSingleLine(true);
+        item.setEllipsize(null);
         item.setPadding(dp(16), 0, dp(16), 0);
         item.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,

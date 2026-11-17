@@ -1666,3 +1666,24 @@ translate 3.5 ms、rank 8.7 ms、format 6.0 ms；`woshizhongguoren` 13.1 ms/次�
 - 插桩（`host_time`/`host_log`/计数器）已全部移除，插件 wasm 从 49 KB
   回到 43.6 KB，manifest 能力恢复为 `[workspace, asset.read, output.emit]`；
   设备上最终安装的是未开 `PIME_PROFILE_TIMING` 的 release 包。
+
+### 候选长词不再省略（2026-11-17）
+
+候选面板的 5 列等宽格把长词按格宽截成「你搞…」；折叠条虽然本身可横滑，
+但也没有把「绝不省略」写成约束。现在两处都以完整显示为准。
+
+- **表格按文本宽度分格**：`renderGrid` 先用 `Paint` 量出每个候选在 20sp
+  下的自然宽度（含左右各 6dp 内边距），一行最多 5 个，放不下就换行；
+  行内剩余宽度均分给各格，所以短词仍能铺满整行、长词拿到自己需要的宽度。
+  单个词比整行还宽时（例如 28 字母的
+  `antidisestablishmentarianism`）独占一行并把字号缩到刚好放下，
+  下限 10sp——只缩小，不截断。
+- **折叠条显式不省略**：候选 `TextView` 设 `setEllipsize(null)`，长词保持
+  完整宽度，靠横向滚动看全；实测 28 字母英文候选在条内完整显示。
+- **表格宽度来源**：首次渲染若 `gridScroll` 还没量出宽度，用屏幕宽减固定
+  侧栏兜底；`OnLayoutChangeListener` 在真实宽度不同时重排一次，横屏/分屏
+  不会留下按旧宽度算出的格子。
+- **验证**：MuMu 12 上 `mi'hao'ni'hao'ni'hao` 的 6 字候选「命好你好你好」
+  在面板中完整显示（每行 2 个），`antidisestablishmentarianism` 独占一行
+  且完整，`shi` 仍是 5 列等宽观感，点「市」提交正确；
+  `assembleDebug` 与 `testDebugUnitTest` 通过。
