@@ -239,6 +239,17 @@ public final class KeyboardView extends View {
         setPage(page == PAGE_LETTERS ? PAGE_SYMBOLS : PAGE_LETTERS);
     }
 
+    /**
+     * Switches 中/英 from the toolbar, taking the same path as the key: the
+     * service hears {@link Listener#onLanguageChanged} and swaps the chain.
+     * Toolbar feedback is the toolbar's own; the key adds a tap sound.
+     */
+    public void toggleLanguage() {
+        english = !english;
+        invalidate();
+        if (listener != null) listener.onLanguageChanged(english);
+    }
+
     private void setPage(int next) {
         if (page == next) return;
         page = next;
@@ -880,9 +891,7 @@ public final class KeyboardView extends View {
         }
         if (key.kind == KIND_LANGUAGE) {
             feedback();
-            english = !english;
-            invalidate();
-            if (listener != null) listener.onLanguageChanged(english);
+            toggleLanguage();
             return;
         }
         feedback();

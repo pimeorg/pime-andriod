@@ -1716,3 +1716,35 @@ translate 3.5 ms、rank 8.7 ms、format 6.0 ms；`woshizhongguoren` 13.1 ms/次�
   一次全部补回；输入 `nihao` 后上滑清掉组合与文字、下滑恢复为 `nihao` 且「你好」
   重回首位；900 ms 长按仍是逐字重复删除；同一 150 ms 上滑在开关关闭时不删字；
   `assembleDebug` 与 `testDebugUnitTest` 通过。
+
+### 自定义工具栏（2026-11-17）
+
+工具栏原来固定四格（页切换、粘贴、设置、收起）。现在按主流输入法的做法做成
+可配置：设置里决定显示哪些工具、按什么顺序从左到右排列，键面上的工具栏即时
+跟着变；把工具全部关掉，整条栏收起，高度让给键盘。
+
+- **工具目录**（`ImeToolbar`）：`symbols` 符号键盘、`language` 中/英切换、
+  `voice` 语音输入、`paste` 粘贴、`candidates` 展开候选、`settings` 键盘设置、
+  `hide` 收起键盘。默认仍是原来的四格，升级后观感不变。中/英与符号键沿用
+  现有高亮语义（英文链/符号页激活时强调色）；中/英走 `KeyboardView.toggleLanguage()`
+  与键面同一条 `onLanguageChanged` 路径；展开候选复用 `toggleCandidatePanel()`。
+- **持久化**（`Prefs.toolbarTools`）：存成逗号分隔的有序 id 列表；未知 id 与
+  重复项读取时丢弃，空列表表示“不要工具栏”。`resetToolbarTools` 删除键回到
+  安装默认。
+- **设置页**：键盘与候选 → 显示 → 工具栏，二级页分「已启用（N）」与
+  「未启用（M）」两张卡。已启用行带上下箭头调整顺序，开关关闭即移出；未启用
+  行开关打开即追加到末尾；底部「恢复默认」。每次改动写偏好 + 广播
+  `ACTION_DISPLAY_CHANGED`，运行中的输入法重建视图，无需退出设置。
+- **快捷入口**：长按工具栏任一图标直接打开该页（语音键除外，长按即说话）。
+  输入法与启动器同进程不同 Activity，`SettingsActivity` 加
+  `launchMode="singleTop"` 并在 `onNewIntent` 处理 `EXTRA_PAGE`，否则启动器
+  已在任务栈顶时新 intent 会被吞掉。
+- **空工具栏**：`hasTools()` 为 false 时工具栏高度取 0、`GONE`；候选面板展开
+  时的高度计算改用 `toolbarHeight()`，收起后也不会把空栏重新显示出来。
+- **语音键**：按下 `onToolHold` → `onVoiceHold()`（权限/模型/麦克风失败时由
+  原流程提示），抬起提交、取消丢弃；与空格长按共用同一条语音状态机。
+- **验证**：MuMu 12（1080×1920，debug）上长按齿轮打开工具栏页；启用「语音输入」
+  后工具栏立即变成 5 格（提示“已添加「语音输入」到工具栏”），上移后顺序变为
+  符号/粘贴/设置/语音/收起；按住语音键弹出麦克风权限，授权后提示已获得权限；
+  关掉全部工具后键盘上方不留空白条，按键照常输入；「恢复默认」回到四格。
+  `assembleDebug` 与 `testDebugUnitTest` 通过。

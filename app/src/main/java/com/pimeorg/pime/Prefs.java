@@ -2,8 +2,13 @@ package com.pimeorg.pime;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.text.TextUtils;
 
 import androidx.appcompat.app.AppCompatDelegate;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Host-level display preferences: theme, keyboard size and key feedback, and how
@@ -97,6 +102,34 @@ public final class Prefs {
 
     public static void setSwipeDelete(Context context, boolean value) {
         prefs(context).edit().putBoolean("swipe_delete", value).apply();
+    }
+
+    /**
+     * Ordered toolbar tools, left to right. An empty list is a valid choice:
+     * the bar hides and the keys keep the room. Unknown ids are dropped so a
+     * renamed tool cannot leave an invisible dead cell behind.
+     */
+    public static List<String> toolbarTools(Context context) {
+        final String raw = prefs(context).getString("toolbar_tools", null);
+        if (raw == null) {
+            return new ArrayList<>(Arrays.asList(ImeToolbar.DEFAULT_TOOLS));
+        }
+        final List<String> tools = new ArrayList<>();
+        for (String id : raw.split(",")) {
+            if (ImeToolbar.isTool(id) && !tools.contains(id)) tools.add(id);
+        }
+        return tools;
+    }
+
+    public static void setToolbarTools(Context context, List<String> tools) {
+        prefs(context).edit()
+                .putString("toolbar_tools", TextUtils.join(",", tools))
+                .apply();
+    }
+
+    /** Back to the install default: the built-in four, in their built-in order. */
+    public static void resetToolbarTools(Context context) {
+        prefs(context).edit().remove("toolbar_tools").apply();
     }
 
     public static int keyboardPercent(Context context) {

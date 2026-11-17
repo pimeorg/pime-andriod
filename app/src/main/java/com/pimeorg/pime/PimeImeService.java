@@ -67,7 +67,7 @@ import java.util.Map;
  * the editor, so the keyboard stays usable with no plugins installed.
  */
 public class PimeImeService extends InputMethodService
-        implements PimeCore.Listener, KeyboardView.Listener {
+        implements PimeCore.Listener, KeyboardView.Listener, ImeToolbar.Listener {
     private static final String TAG = "PimeIme";
 
     private static final byte[] EMPTY_GENERATION = {
@@ -505,11 +505,12 @@ public class PimeImeService extends InputMethodService
 
         /* Toolbar: the same evenly spread icon row WeaveText keeps above its
          * keys. It stays in place while composing, so settings and collapse
-         * never move as the candidate row comes and goes. */
-        toolbar = new ImeToolbar(this, palette);
-        toolbar.setListener(this::onTool);
+         * never move as the candidate row comes and goes. Its tools and their
+         * order come from Prefs; removing all of them gives the room to keys. */
+        toolbar = new ImeToolbar(this, palette, Prefs.toolbarTools(this));
+        toolbar.setListener(this);
         root.addView(toolbar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(TOP_BAR_HEIGHT_DP)));
+                ViewGroup.LayoutParams.MATCH_PARENT, toolbarHeight()));
 
         /* Composition sits on its own line above the scrollable candidate
          * strip, so a long preedit never squeezes the candidates off screen. */
@@ -585,6 +586,7 @@ public class PimeImeService extends InputMethodService
         root.addView(keyboard, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
         toolbar.setSymbolsActive(keyboard.isSymbolPage());
+        toolbar.setLanguageActive(keyboard.isEnglish());
 
         /* The table sits where the keys are, with their exact height: unfolding
          * swaps one for the other, so the editor above keeps its size and the
@@ -594,8 +596,13 @@ public class PimeImeService extends InputMethodService
         root.addView(candidatePanel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
 
-        root.setMinimumHeight(dp(TOP_BAR_HEIGHT_DP) + keyboardHeight);
+        root.setMinimumHeight(toolbarHeight() + keyboardHeight);
         return root;
+    }
+
+    /** Zero when the user kept no toolbar tools; the keys get the room instead. */
+    private int toolbarHeight() {
+        return toolbar != null && toolbar.hasTools() ? dp(TOP_BAR_HEIGHT_DP) : 0;
     }
 
     /**
@@ -958,10 +965,17 @@ public class PimeImeService extends InputMethodService
     }
 
     /** Host actions from the toolbar; none of them touch the plugin chain. */
-    private void onTool(int tool) {
+    @Override
+    public void onTool(String tool) {
         switch (tool) {
-            case ImeToolbar.TOOL_KEYBOARD:
+            case ImeToolbar.TOOL_SYMBOLS:
                 if (keyboard != null) keyboard.togglePage();
+                break;
+            case ImeToolbar.TOOL_LANGUAGE:
+                if (keyboard != null) keyboard.toggleLanguage();
+                break;
+            case ImeToolbar.TOOL_CANDIDATES:
+                toggleCandidatePanel();
                 break;
             case ImeToolbar.TOOL_PASTE:
                 pasteClipboard();
@@ -975,6 +989,22 @@ public class PimeImeService extends InputMethodService
             default:
                 break;
         }
+    }
+
+    /** Long-pressing a toolbar icon is the shortcut to the customization page. */
+    @Override
+    public void onCustomize() {
+        openSettings(SettingsActivity.PAGE_TOOLBAR);
+    }
+
+    @Override
+    public boolean onToolHold(String tool) {
+        return ImeToolbar.TOOL_VOICE.equals(tool) && onVoiceHold();
+    }
+
+    @Override
+    public void onToolRelease(String tool, boolean cancelled) {
+        if (ImeToolbar.TOOL_VOICE.equals(tool)) onVoiceRelease(cancelled);
     }
 
     /* ------------------------------------------------------------- voice */
@@ -1208,6 +1238,7 @@ public class PimeImeService extends InputMethodService
         }
         composition = "";
         if (compositionView != null) compositionView.setText("");
+        if (toolbar != null) toolbar.setLanguageActive(english);
         hideCandidates();
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null && !raw.isEmpty()) {
@@ -1271,8 +1302,14 @@ public class PimeImeService extends InputMethodService
     }
 
     private void openSettings() {
+        openSettings(null);
+    }
+
+    /** Opens the launcher straight on a detail page ("toolbar"), or home. */
+    private void openSettings(String page) {
         final Intent intent = new Intent(this, SettingsActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (page != null) intent.putExtra(SettingsActivity.EXTRA_PAGE, page);
         startActivity(intent);
     }
 
@@ -1951,7 +1988,7 @@ public class PimeImeService extends InputMethodService
              * typing; the table gives them up so the panel is just the preedit
              * line, the category track and candidates, as WeChat draws it. */
             final int room = keyAreaHeight + dp(CANDIDATE_ROW_HEIGHT_DP)
-                    + dp(TOP_BAR_HEIGHT_DP) + Math.max(1, dp(1) / 2);
+                    + toolbarHeight() + Math.max(1, dp(1) / 2);
             final int tall = dp(GRID_ROW_HEIGHT_DP);
             final int chrome = dp(TAB_ROW_HEIGHT_DP) + Math.max(1, dp(1) / 2);
             /* Whole rows only: the pinned last band (delete + 首笔画) has to sit
@@ -1965,7 +2002,8 @@ public class PimeImeService extends InputMethodService
             }
         }
         if (toolbar != null) {
-            toolbar.setVisibility(unfolded ? View.GONE : View.VISIBLE);
+            toolbar.setVisibility(unfolded || !toolbar.hasTools()
+                    ? View.GONE : View.VISIBLE);
         }
         if (keyboardDivider != null) {
             keyboardDivider.setVisibility(unfolded ? View.GONE : View.VISIBLE);

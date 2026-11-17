@@ -8,9 +8,13 @@ import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
+import android.view.MotionEvent;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Toolbar above the keys, in the spirit of WeaveText's idle top bar: one evenly
@@ -19,64 +23,118 @@ import android.widget.LinearLayout;
  * composition and candidates get their own row below it, so settings and
  * collapse never move as the candidate strip comes and goes.
  *
+ * <p>Which tools show, and in what order, is the user's: the settings page
+ * (or a long press on an icon; the voice key's long press is the utterance)
+ * opens the customization list. An empty list hides the bar entirely.
+ *
  * Only host actions live here. What a key means is the plugin chain's business.
  */
 final class ImeToolbar extends LinearLayout {
-    static final int TOOL_KEYBOARD = 0;
-    static final int TOOL_PASTE = 1;
-    static final int TOOL_SETTINGS = 2;
-    static final int TOOL_HIDE = 3;
+    /* Stable ids; they are what Prefs stores, so renaming one resets it. */
+    static final String TOOL_SYMBOLS = "symbols";
+    static final String TOOL_LANGUAGE = "language";
+    static final String TOOL_VOICE = "voice";
+    static final String TOOL_PASTE = "paste";
+    static final String TOOL_CANDIDATES = "candidates";
+    static final String TOOL_SETTINGS = "settings";
+    static final String TOOL_HIDE = "hide";
+
+    /** Every tool the customization page can offer, in catalog order. */
+    static final String[] ALL_TOOLS = {
+            TOOL_SYMBOLS,
+            TOOL_LANGUAGE,
+            TOOL_VOICE,
+            TOOL_PASTE,
+            TOOL_CANDIDATES,
+            TOOL_SETTINGS,
+            TOOL_HIDE,
+    };
+
+    /** What a fresh install shows, and what "restore defaults" goes back to. */
+    static final String[] DEFAULT_TOOLS = {
+            TOOL_SYMBOLS,
+            TOOL_PASTE,
+            TOOL_SETTINGS,
+            TOOL_HIDE,
+    };
 
     interface Listener {
-        void onTool(int tool);
+        void onTool(String tool);
+
+        /**
+         * A tool icon was long-pressed. Mainstream keyboards treat this as
+         * "customize the toolbar", so the host opens that settings page.
+         */
+        void onCustomize();
+
+        /**
+         * A press-and-hold tool (voice) went down. True means the action
+         * started and {@link #onToolRelease} will follow.
+         */
+        default boolean onToolHold(String tool) {
+            return false;
+        }
+
+        default void onToolRelease(String tool, boolean cancelled) {
+        }
     }
 
-    private static final int[] ICONS = {
-            R.drawable.ic_keyboard,
-            R.drawable.ic_clipboard,
-            R.drawable.ic_settings,
-            R.drawable.ic_arrow_down,
-    };
-
-    private static final int[] LABELS = {
-            R.string.ime_action_symbols,
-            R.string.ime_action_paste,
-            R.string.ime_action_settings,
-            R.string.ime_action_hide,
-    };
-
     private final KeyboardTheme palette;
-    private final ImageButton[] buttons = new ImageButton[ICONS.length];
+    private final List<String> tools;
+    private final ImageButton[] buttons;
     private Listener listener;
     private boolean symbolsActive;
+    private boolean englishActive;
+    /** A voice button is down and the microphone turn was opened. */
+    private boolean voiceDown;
 
-    ImeToolbar(Context context, KeyboardTheme palette) {
+    ImeToolbar(Context context, KeyboardTheme palette, List<String> tools) {
         super(context);
         this.palette = palette;
+        this.tools = new ArrayList<>(tools);
+        this.buttons = new ImageButton[this.tools.size()];
         setOrientation(HORIZONTAL);
         setGravity(Gravity.CENTER_VERTICAL);
         setBackgroundColor(palette.bar);
 
-        for (int i = 0; i < ICONS.length; i++) {
+        for (int i = 0; i < this.tools.size(); i++) {
+            final String tool = this.tools.get(i);
             final ImageButton button = new ImageButton(context);
-            button.setImageResource(ICONS[i]);
+            button.setImageResource(iconRes(tool));
             button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
             button.setPadding(dp(10), dp(10), dp(10), dp(10));
             button.setBackground(cellBackground(false));
             button.setImageTintList(ColorStateList.valueOf(palette.hint));
-            button.setContentDescription(context.getString(LABELS[i]));
-            final int tool = i;
-            button.setOnClickListener(v -> {
-                if (Prefs.vibrate(context)) {
-                    button.performHapticFeedback(
-                            HapticFeedbackConstants.KEYBOARD_TAP);
-                }
-                if (listener != null) listener.onTool(tool);
-            });
+            button.setContentDescription(context.getString(labelRes(tool)));
+            if (TOOL_VOICE.equals(tool)) {
+                button.setOnTouchListener((view, event) -> handleVoiceTouch(view, event, tool));
+            } else {
+                button.setOnClickListener(v -> {
+                    if (Prefs.vibrate(context)) {
+                        button.performHapticFeedback(
+                                HapticFeedbackConstants.KEYBOARD_TAP);
+                    }
+                    if (listener != null) listener.onTool(tool);
+                });
+            }
+            /* Long press is the shortcut into customization. It does not sit on
+             * the voice button: there a long press is the utterance itself. */
+            if (!TOOL_VOICE.equals(tool)) {
+                button.setOnLongClickListener(v -> {
+                    if (listener != null) listener.onCustomize();
+                    return true;
+                });
+            }
             addView(button, new LayoutParams(0, LayoutParams.MATCH_PARENT, 1f));
             buttons[i] = button;
         }
-        setSymbolsActive(false);
+        if (this.tools.isEmpty()) setVisibility(GONE);
+        updateCellBackgrounds();
+    }
+
+    /** False when the user removed every tool; the service hides the bar then. */
+    boolean hasTools() {
+        return !tools.isEmpty();
     }
 
     void setListener(Listener listener) {
@@ -90,11 +148,12 @@ final class ImeToolbar extends LinearLayout {
     void setSymbolsActive(boolean active) {
         symbolsActive = active;
         updateCellBackgrounds();
-        final ImageButton button = buttons[TOOL_KEYBOARD];
-        button.setImageTintList(ColorStateList.valueOf(
-                active ? palette.accent : palette.hint));
-        button.setContentDescription(getContext().getString(active
-                ? R.string.ime_action_letters : R.string.ime_action_symbols));
+    }
+
+    /** The language tool is highlighted while the English chain is active. */
+    void setLanguageActive(boolean english) {
+        englishActive = english;
+        updateCellBackgrounds();
     }
 
     @Override
@@ -103,12 +162,67 @@ final class ImeToolbar extends LinearLayout {
         updateCellBackgrounds();
     }
 
+    @Override
+    protected void onDetachedFromWindow() {
+        /* The bar is rebuilt whenever the tools or the theme change. A turn
+         * cannot outlive the finger that opened it, so drop it here, the same
+         * way the key surface does. */
+        if (voiceDown) {
+            voiceDown = false;
+            if (listener != null) listener.onToolRelease(TOOL_VOICE, true);
+        }
+        super.onDetachedFromWindow();
+    }
+
+    /**
+     * Voice is press-and-hold, like the space key: down opens the microphone,
+     * up commits and cancel drops the utterance. A down that cannot start
+     * voice says why (or opens the permission screen) and stays a no-op.
+     */
+    private boolean handleVoiceTouch(android.view.View view, MotionEvent event, String tool) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                voiceDown = listener != null && listener.onToolHold(tool);
+                if (voiceDown && Prefs.vibrate(getContext())) {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                }
+                view.setPressed(true);
+                return true;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                final boolean cancelled = event.getActionMasked() == MotionEvent.ACTION_CANCEL;
+                if (voiceDown && listener != null) listener.onToolRelease(tool, cancelled);
+                voiceDown = false;
+                view.setPressed(false);
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private void updateCellBackgrounds() {
         for (int i = 0; i < buttons.length; i++) {
             if (buttons[i] == null) continue;
-            final boolean active = i == TOOL_KEYBOARD && symbolsActive;
+            final String tool = tools.get(i);
+            final boolean active = isActive(tool);
             buttons[i].setBackground(cellBackground(active));
+            buttons[i].setImageTintList(ColorStateList.valueOf(
+                    active ? palette.accent : palette.hint));
+            if (TOOL_SYMBOLS.equals(tool)) {
+                buttons[i].setContentDescription(getContext().getString(
+                        symbolsActive ? R.string.ime_action_letters
+                                : R.string.ime_action_symbols));
+            } else if (TOOL_LANGUAGE.equals(tool)) {
+                buttons[i].setContentDescription(getContext().getString(
+                        englishActive ? R.string.ime_action_chinese
+                                : R.string.ime_action_english));
+            }
         }
+    }
+
+    private boolean isActive(String tool) {
+        return TOOL_SYMBOLS.equals(tool) && symbolsActive
+                || TOOL_LANGUAGE.equals(tool) && englishActive;
     }
 
     /**
@@ -117,7 +231,8 @@ final class ImeToolbar extends LinearLayout {
      * the highlight reads as a selected tool rather than a tab bar.
      */
     private Drawable cellBackground(boolean active) {
-        final int cell = getWidth() / ICONS.length;
+        final int count = Math.max(1, buttons.length);
+        final int cell = getWidth() / count;
         final int side = cell > 0
                 ? Math.max(dp(6), (cell - dp(56)) / 2)
                 : dp(18);
@@ -132,6 +247,72 @@ final class ImeToolbar extends LinearLayout {
          * leaves the icon alone. */
         return new RippleDrawable(ColorStateList.valueOf(palette.ripple),
                 content, null);
+    }
+
+    // ------------------------------------------------------------ catalog
+
+    static boolean isTool(String id) {
+        for (String tool : ALL_TOOLS) {
+            if (tool.equals(id)) return true;
+        }
+        return false;
+    }
+
+    static int iconRes(String id) {
+        switch (id) {
+            case TOOL_SYMBOLS:
+                return R.drawable.ic_keyboard;
+            case TOOL_LANGUAGE:
+                return R.drawable.ic_translate;
+            case TOOL_VOICE:
+                return R.drawable.ic_mic;
+            case TOOL_PASTE:
+                return R.drawable.ic_clipboard;
+            case TOOL_CANDIDATES:
+                return R.drawable.ic_expand_more;
+            case TOOL_SETTINGS:
+                return R.drawable.ic_settings;
+            default:
+                return R.drawable.ic_arrow_down;
+        }
+    }
+
+    static int labelRes(String id) {
+        switch (id) {
+            case TOOL_SYMBOLS:
+                return R.string.tool_symbols;
+            case TOOL_LANGUAGE:
+                return R.string.tool_language;
+            case TOOL_VOICE:
+                return R.string.tool_voice;
+            case TOOL_PASTE:
+                return R.string.tool_paste;
+            case TOOL_CANDIDATES:
+                return R.string.tool_candidates;
+            case TOOL_SETTINGS:
+                return R.string.tool_settings;
+            default:
+                return R.string.tool_hide;
+        }
+    }
+
+    static int descriptionRes(String id) {
+        switch (id) {
+            case TOOL_SYMBOLS:
+                return R.string.tool_symbols_desc;
+            case TOOL_LANGUAGE:
+                return R.string.tool_language_desc;
+            case TOOL_VOICE:
+                return R.string.tool_voice_desc;
+            case TOOL_PASTE:
+                return R.string.tool_paste_desc;
+            case TOOL_CANDIDATES:
+                return R.string.tool_candidates_desc;
+            case TOOL_SETTINGS:
+                return R.string.tool_settings_desc;
+            default:
+                return R.string.tool_hide_desc;
+        }
     }
 
     private int dp(float value) {

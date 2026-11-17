@@ -66,6 +66,10 @@ import java.util.Set;
 
 /** Launcher entry: enable the IME, pick it, and show where plugins live. */
 public final class SettingsActivity extends AppCompatActivity {
+    /** Opens the launcher straight on a detail page; the IME toolbar uses it. */
+    public static final String EXTRA_PAGE = "page";
+    public static final String PAGE_TOOLBAR = "toolbar";
+
     private interface Page {
         void build(LinearLayout parent);
     }
@@ -156,6 +160,9 @@ public final class SettingsActivity extends AppCompatActivity {
         heroSteps = findViewById(R.id.hero_steps);
 
         buildHomeRows();
+        if (PAGE_TOOLBAR.equals(getIntent().getStringExtra(EXTRA_PAGE))) {
+            openToolbarSettings();
+        }
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
@@ -167,6 +174,17 @@ public final class SettingsActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        /* The launcher is usually already in its task when the keyboard asks
+         * for the toolbar page, so the second visit arrives here, not onCreate. */
+        if (PAGE_TOOLBAR.equals(intent.getStringExtra(EXTRA_PAGE))) {
+            openToolbarSettings();
+        }
     }
 
     @Override
@@ -1274,9 +1292,149 @@ public final class SettingsActivity extends AppCompatActivity {
             addRow(display, R.drawable.ic_contrast, getString(R.string.row_theme),
                     themeLabel(Prefs.theme(this)), R.drawable.ic_chevron_right,
                     v -> chooseTheme());
+            addDivider(display);
+            addRow(display, R.drawable.ic_tune, getString(R.string.row_toolbar),
+                    getString(R.string.row_toolbar_desc,
+                            Prefs.toolbarTools(this).size()),
+                    R.drawable.ic_chevron_right, v -> openToolbarSettings());
 
             addTextBlock(parent, getString(R.string.settings_note));
         });
+    }
+
+    /**
+     * Toolbar customization, the way mainstream keyboards do it: the tools that
+     * are on keep their left-to-right order and can be moved here; the rest sit
+     * below and join the end when switched on.
+     */
+    private void openToolbarSettings() {
+        enterDetail(R.string.row_toolbar, parent -> {
+            addTextBlock(parent, getString(R.string.toolbar_note));
+
+            final List<String> enabled = Prefs.toolbarTools(this);
+            addGroupTitle(parent, getString(R.string.toolbar_enabled, enabled.size()));
+            final LinearLayout onCard = addCard(parent);
+            if (enabled.isEmpty()) {
+                final TextView empty = text(getString(R.string.toolbar_empty), 14, false,
+                        attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant));
+                empty.setPadding(dp(16), dp(20), dp(16), dp(20));
+                onCard.addView(empty, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            for (int i = 0; i < enabled.size(); i++) {
+                if (i > 0) addDivider(onCard);
+                addToolRow(onCard, enabled.get(i), i, enabled.size(), true);
+            }
+
+            final List<String> disabled = new ArrayList<>();
+            for (String id : ImeToolbar.ALL_TOOLS) {
+                if (!enabled.contains(id)) disabled.add(id);
+            }
+            if (!disabled.isEmpty()) {
+                addGroupTitle(parent, getString(R.string.toolbar_disabled, disabled.size()));
+                final LinearLayout offCard = addCard(parent);
+                for (int i = 0; i < disabled.size(); i++) {
+                    if (i > 0) addDivider(offCard);
+                    addToolRow(offCard, disabled.get(i), -1, enabled.size(), false);
+                }
+            }
+
+            final View spacer = new View(this);
+            parent.addView(spacer, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(16)));
+            final LinearLayout resetCard = addCard(parent);
+            addRow(resetCard, R.drawable.ic_restore,
+                    getString(R.string.toolbar_reset), getString(R.string.toolbar_reset_desc),
+                    0, v -> resetToolbar());
+        });
+    }
+
+    /** One tool on the customization page: icon, name, order arrows, switch. */
+    private void addToolRow(LinearLayout parent, String id, int index, int count,
+                            boolean enabled) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(68));
+        row.setPadding(dp(16), dp(8), dp(8), dp(8));
+
+        final ImageView icon = new ImageView(this);
+        icon.setImageResource(ImeToolbar.iconRes(id));
+        icon.setImageTintList(ColorStateList.valueOf(
+                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+        icon.setContentDescription(null);
+        row.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+
+        final LinearLayout lines = new LinearLayout(this);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout.LayoutParams lineParams =
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lineParams.setMarginStart(dp(16));
+        row.addView(lines, lineParams);
+
+        final CharSequence title = getString(ImeToolbar.labelRes(id));
+        lines.addView(text(title, 16, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurface)));
+        lines.addView(text(getString(ImeToolbar.descriptionRes(id)), 13, false,
+                attrColor(com.google.android.material.R.attr.colorOnSurfaceVariant)));
+
+        if (enabled) {
+            final ImageView up = arrowButton(R.drawable.ic_arrow_up,
+                    getString(R.string.action_move_up_named, title), index != 0,
+                    () -> moveTool(id, -1));
+            final ImageView down = arrowButton(R.drawable.ic_arrow_down,
+                    getString(R.string.action_move_down_named, title), index != count - 1,
+                    () -> moveTool(id, 1));
+            row.addView(up, new LinearLayout.LayoutParams(dp(36), dp(36)));
+            row.addView(down, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        }
+
+        final MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setChecked(enabled);
+        toggle.setContentDescription(title);
+        toggle.setOnCheckedChangeListener((button, checked) -> setToolEnabled(id, checked));
+        final LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        toggleParams.setMarginStart(dp(4));
+        row.addView(toggle, toggleParams);
+
+        parent.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    /** Switching on appends the tool; switching off keeps the others' order. */
+    private void setToolEnabled(String id, boolean enabled) {
+        final List<String> tools = Prefs.toolbarTools(this);
+        if (enabled) {
+            if (!tools.contains(id)) tools.add(id);
+        } else {
+            tools.remove(id);
+        }
+        Prefs.setToolbarTools(this, tools);
+        broadcastDisplayChanged();
+        snack(getString(enabled ? R.string.tool_on : R.string.tool_off,
+                getString(ImeToolbar.labelRes(id))));
+        rebuildDetail();
+    }
+
+    private void moveTool(String id, int direction) {
+        final List<String> tools = Prefs.toolbarTools(this);
+        final int from = tools.indexOf(id);
+        final int to = from + direction;
+        if (from < 0 || to < 0 || to >= tools.size()) return;
+        tools.remove(from);
+        tools.add(to, id);
+        Prefs.setToolbarTools(this, tools);
+        broadcastDisplayChanged();
+        rebuildDetail();
+    }
+
+    private void resetToolbar() {
+        Prefs.resetToolbarTools(this);
+        broadcastDisplayChanged();
+        snack(getString(R.string.toolbar_reset_done));
+        rebuildDetail();
     }
 
     private CharSequence heightLabel(int percent) {

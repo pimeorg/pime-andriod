@@ -19,7 +19,7 @@ pime-android/
 │   ├── PimeImeService.java               InputMethodService：core 生命周期与 HAL sink
 │   ├── PimeCore.java                     JNI 封装
 │   ├── KeyboardView.java                 软键盘视图（只上报按键）
-│   ├── ImeToolbar.java                   顶栏工具栏（页切换、粘贴、设置、收起）
+│   ├── ImeToolbar.java                   顶栏工具栏（工具集合与顺序可自定义）
 │   ├── VoiceModels.java                  语音模型下载/校验/解包
 │   ├── VoicePermissionActivity.java      申请 RECORD_AUDIO 的透明 Activity
 │   └── SettingsActivity.java             启用/切换输入法与宿主偏好
