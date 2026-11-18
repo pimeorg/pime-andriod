@@ -2569,12 +2569,15 @@ public class PimeImeService extends InputMethodService
      * {@link #CANDIDATE_GRID_COLUMNS}, in chain order. Each row is a block:
      * the cells, then a hairline.
      *
-     * <p>Cells are sized by their text, not by an equal share of the row. A
-     * long word takes the width it needs, its short neighbours keep their own,
-     * and whatever the row has left over is spread evenly. A row therefore
-     * holds fewer candidates when they are wide, and a word wider than the
-     * whole row gets a line to itself at a reduced size. Nothing is ever
-     * ellipsized: every candidate the table shows is readable in full.
+     * <p>The table is a column grid. Every cell is at least one column wide
+     * ({@code available / CANDIDATE_GRID_COLUMNS}), so a short row — the last
+     * page of the list, or one broken because the next word did not fit —
+     * still lines its cells up with the rows above instead of stretching one
+     * word across the line or packing them to the left. A word wider than a
+     * column takes the width it needs and pushes its neighbours, and a word
+     * wider than the whole row gets a line to itself at a reduced size.
+     * Nothing is ever ellipsized: every candidate the table shows is readable
+     * in full.
      */
     private void renderGrid() {
         if (gridBoard == null) return;
@@ -2598,20 +2601,25 @@ public class PimeImeService extends InputMethodService
         }
         final int available = gridRenderedWidth;
         final int columns = CANDIDATE_GRID_COLUMNS;
-        final int[] naturalWidths = new int[columns];
+        /* One column of the grid. Every cell is at least this wide, so the
+         * cells of a short row sit on the same column boundaries as the rows
+         * above it. */
+        final int columnWidth = Math.max(1, available / columns);
+        final int[] cellWidths = new int[columns];
         final int line = Math.max(1, dp(1) / 2);
         int at = 0;
         while (at < entries.size()) {
             int count = 0;
-            int natural = 0;
+            int used = 0;
             /* Fill the row with as many whole words as fit; the first one is
              * always taken, even when it is wider than the row. */
             while (at + count < entries.size() && count < columns) {
-                final int width = (int) Math.ceil(
+                final int natural = (int) Math.ceil(
                         gridCellWidth(entries.get(at + count).text));
-                if (count > 0 && natural + width > available) break;
-                naturalWidths[count] = width;
-                natural += width;
+                final int width = Math.max(columnWidth, natural);
+                if (count > 0 && used + width > available) break;
+                cellWidths[count] = width;
+                used += width;
                 ++count;
             }
             final LinearLayout block = new LinearLayout(this);
@@ -2619,22 +2627,15 @@ public class PimeImeService extends InputMethodService
             final LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            final int extra = Math.max(0, available - natural);
-            final int share = extra / count;
-            int remainder = extra % count;
             for (int column = 0; column < count; ++column) {
                 final GridEntry entry = entries.get(at + column);
-                int width = naturalWidths[column] + share;
-                if (remainder > 0) {
-                    ++width;
-                    --remainder;
-                }
+                int width = cellWidths[column];
                 float textSize = GRID_TEXT_SIZE_SP;
                 if (width > available) {
                     /* One word wider than the row: shrink the text instead of
                      * cutting the word off. */
                     textSize = Math.max(GRID_MIN_TEXT_SIZE_SP,
-                            GRID_TEXT_SIZE_SP * available / natural);
+                            GRID_TEXT_SIZE_SP * available / width);
                     width = available;
                 }
                 row.addView(gridCell(entry, at + column, palette, textSize),
