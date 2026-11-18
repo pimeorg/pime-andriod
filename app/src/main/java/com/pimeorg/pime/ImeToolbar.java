@@ -32,7 +32,7 @@ import java.util.List;
  */
 final class ImeToolbar extends LinearLayout {
     /* Stable ids; they are what Prefs stores, so renaming one resets it. */
-    static final String TOOL_SYMBOLS = "symbols";
+    static final String TOOL_LAYOUT = "layout";
     static final String TOOL_LANGUAGE = "language";
     static final String TOOL_VOICE = "voice";
     static final String TOOL_PASTE = "paste";
@@ -41,7 +41,7 @@ final class ImeToolbar extends LinearLayout {
 
     /** Every tool the customization page can offer, in catalog order. */
     static final String[] ALL_TOOLS = {
-            TOOL_SYMBOLS,
+            TOOL_LAYOUT,
             TOOL_LANGUAGE,
             TOOL_VOICE,
             TOOL_PASTE,
@@ -51,7 +51,7 @@ final class ImeToolbar extends LinearLayout {
 
     /** What a fresh install shows, and what "restore defaults" goes back to. */
     static final String[] DEFAULT_TOOLS = {
-            TOOL_SYMBOLS,
+            TOOL_LAYOUT,
             TOOL_PASTE,
             TOOL_SETTINGS,
             TOOL_HIDE,
@@ -82,7 +82,8 @@ final class ImeToolbar extends LinearLayout {
     private final List<String> tools;
     private final ImageButton[] buttons;
     private Listener listener;
-    private boolean symbolsActive;
+    /** The key area is showing the handwriting layout instead of the keys. */
+    private boolean layoutActive;
     private boolean englishActive;
     /** A voice button is down and the microphone turn was opened. */
     private boolean voiceDown;
@@ -136,16 +137,23 @@ final class ImeToolbar extends LinearLayout {
         return !tools.isEmpty();
     }
 
+    /** The button for a tool, so the service can anchor a menu to it. */
+    android.view.View toolButton(String id) {
+        final int index = tools.indexOf(id);
+        return index >= 0 ? buttons[index] : null;
+    }
+
     void setListener(Listener listener) {
         this.listener = listener;
     }
 
     /**
-     * The keyboard tool means "switch the key page", so the highlight says
-     * which page is showing and the description says where a tap goes.
+     * The keyboard tool opens the layout chooser. The highlight only says
+     * "the keys are not showing" (the handwriting layout is up); a plain
+     * keyboard layout is the resting state and needs no pill.
      */
-    void setSymbolsActive(boolean active) {
-        symbolsActive = active;
+    void setLayoutActive(boolean handwriting) {
+        layoutActive = handwriting;
         updateCellBackgrounds();
     }
 
@@ -207,11 +215,7 @@ final class ImeToolbar extends LinearLayout {
             buttons[i].setBackground(cellBackground(active));
             buttons[i].setImageTintList(ColorStateList.valueOf(
                     active ? palette.accent : palette.hint));
-            if (TOOL_SYMBOLS.equals(tool)) {
-                buttons[i].setContentDescription(getContext().getString(
-                        symbolsActive ? R.string.ime_action_letters
-                                : R.string.ime_action_symbols));
-            } else if (TOOL_LANGUAGE.equals(tool)) {
+            if (TOOL_LANGUAGE.equals(tool)) {
                 buttons[i].setContentDescription(getContext().getString(
                         englishActive ? R.string.ime_action_chinese
                                 : R.string.ime_action_english));
@@ -220,7 +224,7 @@ final class ImeToolbar extends LinearLayout {
     }
 
     private boolean isActive(String tool) {
-        return TOOL_SYMBOLS.equals(tool) && symbolsActive
+        return TOOL_LAYOUT.equals(tool) && layoutActive
                 || TOOL_LANGUAGE.equals(tool) && englishActive;
     }
 
@@ -259,7 +263,7 @@ final class ImeToolbar extends LinearLayout {
 
     static int iconRes(String id) {
         switch (id) {
-            case TOOL_SYMBOLS:
+            case TOOL_LAYOUT:
                 return R.drawable.ic_keyboard;
             case TOOL_LANGUAGE:
                 return R.drawable.ic_translate;
@@ -276,8 +280,8 @@ final class ImeToolbar extends LinearLayout {
 
     static int labelRes(String id) {
         switch (id) {
-            case TOOL_SYMBOLS:
-                return R.string.tool_symbols;
+            case TOOL_LAYOUT:
+                return R.string.tool_layout;
             case TOOL_LANGUAGE:
                 return R.string.tool_language;
             case TOOL_VOICE:
@@ -293,8 +297,8 @@ final class ImeToolbar extends LinearLayout {
 
     static int descriptionRes(String id) {
         switch (id) {
-            case TOOL_SYMBOLS:
-                return R.string.tool_symbols_desc;
+            case TOOL_LAYOUT:
+                return R.string.tool_layout_desc;
             case TOOL_LANGUAGE:
                 return R.string.tool_language_desc;
             case TOOL_VOICE:

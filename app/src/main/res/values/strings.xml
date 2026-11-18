@@ -110,14 +110,14 @@
     <string name="toolbar_disabled">未启用（%1$d）</string>
     <string name="toolbar_empty">还没有启用任何工具。用下面的开关添加。</string>
     <string name="toolbar_reset">恢复默认</string>
-    <string name="toolbar_reset_desc">符号、粘贴、设置、收起，按默认顺序</string>
+    <string name="toolbar_reset_desc">键盘布局、粘贴、设置、收起，按默认顺序</string>
     <string name="toolbar_reset_done">工具栏已恢复默认</string>
     <string name="toolbar_drag_hint">长按拖动调整顺序</string>
     <string name="toolbar_order_changed">工具栏顺序已更新</string>
     <string name="tool_on">已添加「%1$s」到工具栏</string>
     <string name="tool_off">已从工具栏移除「%1$s」</string>
-    <string name="tool_symbols">符号键盘</string>
-    <string name="tool_symbols_desc">在字母页与符号页之间切换</string>
+    <string name="tool_layout">键盘布局</string>
+    <string name="tool_layout_desc">在拼音、手写等输入布局间切换</string>
     <string name="tool_language">中/英切换</string>
     <string name="tool_language_desc">切换中文链与内置英文链</string>
     <string name="tool_voice">语音输入</string>
@@ -132,8 +132,16 @@
 
     <string name="ime_action_settings">键盘设置</string>
     <string name="ime_action_hide">收起键盘</string>
-    <string name="ime_action_symbols">符号键盘</string>
-    <string name="ime_action_letters">字母键盘</string>
+    <string name="ime_action_layout">键盘布局</string>
+    <string name="layout_pinyin">拼音 26 键</string>
+    <string name="layout_shuangpin">双拼</string>
+    <string name="layout_wubi">五笔</string>
+    <string name="layout_t9">九键</string>
+    <string name="layout_cangjie">仓颉</string>
+    <string name="layout_handwriting">手写</string>
+    <string name="layout_keyboard">键盘</string>
+    <string name="layout_switched">已切换到「%1$s」</string>
+    <string name="layout_unavailable">这个布局无法加载</string>
     <string name="ime_action_paste">粘贴</string>
     <string name="ime_action_english">切换到英文</string>
     <string name="ime_action_chinese">切换到中文</string>
@@ -157,6 +165,7 @@
     <string name="ime_handwriting_hint">在这里手写</string>
     <string name="ime_handwriting_undo">撤销</string>
     <string name="ime_handwriting_clear">清空</string>
+    <string name="ime_handwriting_delete">退格</string>
     <string name="ime_candidates_empty">没有候选</string>
     <string name="voice_unavailable_secure">密码输入框不能用语音</string>
     <string name="voice_unavailable_plugin">语音插件不可用</string>

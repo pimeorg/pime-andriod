@@ -82,8 +82,8 @@ public final class KeyboardView extends View {
         void onKey(Key key);
 
         /**
-         * The visible key page changed. The host mirrors it on the toolbar, so
-         * a tap on the toolbar and the in-keyboard page keys stay in sync.
+         * The visible key page changed. The keys own the page switch; the host
+         * has no mirror to update and may ignore this.
          */
         default void onPageChanged(boolean symbols) {
         }
@@ -227,16 +227,6 @@ public final class KeyboardView extends View {
         if (this.english == english) return;
         this.english = english;
         invalidate();
-    }
-
-    /** True while the symbols page is showing; the toolbar highlights this. */
-    public boolean isSymbolPage() {
-        return page == PAGE_SYMBOLS;
-    }
-
-    /** Switches between the letter and symbol pages (toolbar tool). */
-    public void togglePage() {
-        setPage(page == PAGE_LETTERS ? PAGE_SYMBOLS : PAGE_LETTERS);
     }
 
     /**

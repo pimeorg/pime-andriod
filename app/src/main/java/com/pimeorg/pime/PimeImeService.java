@@ -167,6 +167,21 @@ public class PimeImeService extends InputMethodService
     private File pluginDir;
     private KeyboardView keyboard;
     private ImeToolbar toolbar;
+    /**
+     * The key area is showing the handwriting layout instead of the keys.
+     * Persisted through {@link Prefs#handwritingLayout}; picking any chain
+     * clears it. The layout view below is a sibling of the keyboard, the same
+     * way the candidate panel takes the rectangle over.
+     */
+    private boolean handwritingMode;
+    private LinearLayout handwritingLayoutView;
+    private HandwritingView handwritingPad;
+    private HorizontalScrollView handwritingPadScroll;
+    private LinearLayout handwritingPadBoard;
+    private final List<HandwritingRecognizer.Match> handwritingPadMatches =
+            new ArrayList<>();
+    /** The layout chooser; non-focusable so it does not end the input session. */
+    private PopupWindow layoutPopup;
     /** Hairline between the candidate row and the key area. */
     private View keyboardDivider;
     /** Palette the current view was built with; candidates must match it. */
@@ -489,6 +504,7 @@ public class PimeImeService extends InputMethodService
     @Override
     public void onDestroy() {
         dismissCandidateMenu();
+        dismissLayoutMenu();
         cancelVoice();
         if (rebuildReceiver != null) {
             unregisterReceiver(rebuildReceiver);
@@ -594,7 +610,8 @@ public class PimeImeService extends InputMethodService
         keyboard.setListener(this);
         root.addView(keyboard, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
-        toolbar.setSymbolsActive(keyboard.isSymbolPage());
+        handwritingMode = Prefs.handwritingLayout(this);
+        toolbar.setLayoutActive(handwritingMode);
         toolbar.setLanguageActive(keyboard.isEnglish());
 
         /* The table sits where the keys are, with their exact height: unfolding
@@ -605,12 +622,21 @@ public class PimeImeService extends InputMethodService
         root.addView(candidatePanel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
 
+        /* The handwriting layout takes the same rectangle as the keys, so
+         * switching layouts never changes the IME height or reflows the
+         * editor. */
+        handwritingLayoutView = buildHandwritingLayout(palette);
+        root.addView(handwritingLayoutView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
+
         /* The toolbar and the candidate row swap within one band, so reserve
          * the taller of the two: the slack sits above the bar and the keys do
          * not move as the row comes and goes. */
         final int barBand = toolbar.hasTools()
                 ? Math.max(toolbarHeight(), dp(CANDIDATE_ROW_HEIGHT_DP)) : 0;
         root.setMinimumHeight(barBand + keyboardHeight);
+        /* First paint: hide the surface that the persisted layout does not use. */
+        updateCandidateRow();
         return root;
     }
 
@@ -982,8 +1008,8 @@ public class PimeImeService extends InputMethodService
     @Override
     public void onTool(String tool) {
         switch (tool) {
-            case ImeToolbar.TOOL_SYMBOLS:
-                if (keyboard != null) keyboard.togglePage();
+            case ImeToolbar.TOOL_LAYOUT:
+                showLayoutMenu();
                 break;
             case ImeToolbar.TOOL_LANGUAGE:
                 if (keyboard != null) keyboard.toggleLanguage();
@@ -1019,6 +1045,305 @@ public class PimeImeService extends InputMethodService
     private void openToolbarSettings() {
         requestHideSelf(0);
         openSettings(SettingsActivity.PAGE_TOOLBAR);
+    }
+
+    /* ------------------------------------------------------------- layout */
+
+    /**
+     * The keyboard tool's menu: the built-in handwriting layout plus every
+     * installed chain except the reserved English one. A chain is an input
+     * layout (pinyin, wubi, shuangpin, ...), so this is the layout switch.
+     * 中/英 stays on its own key and toolbar tool.
+     */
+    private void showLayoutMenu() {
+        if (toolbar == null) return;
+        dismissCandidateMenu();
+        dismissLayoutMenu();
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        final LinearLayout menu = new LinearLayout(this);
+        menu.setOrientation(LinearLayout.VERTICAL);
+        final GradientDrawable fill = new GradientDrawable();
+        fill.setColor(palette.panel);
+        fill.setCornerRadius(dp(12));
+        fill.setStroke(Math.max(1, dp(1) / 2), palette.divider);
+        menu.setBackground(fill);
+        menu.setPadding(0, dp(4), 0, dp(4));
+
+        final String active = ChainStore.activeChainName(this);
+        boolean first = true;
+        for (File chain : ChainStore.listChains(this)) {
+            if (chain.getName().equals(ChainStore.ENGLISH_CHAIN)) continue;
+            if (!first) menu.addView(menuDivider(palette));
+            first = false;
+            final File target = chain;
+            final boolean checked = !handwritingMode
+                    && chain.getName().equals(active);
+            menu.addView(layoutMenuRow(layoutLabel(chain), checked, palette,
+                    v -> {
+                        dismissLayoutMenu();
+                        selectLayoutChain(target);
+                    }), layoutMenuRowParams());
+        }
+        if (!first) menu.addView(menuDivider(palette));
+        menu.addView(layoutMenuRow(getString(R.string.layout_handwriting),
+                handwritingMode, palette, v -> {
+                    dismissLayoutMenu();
+                    setHandwritingLayout(true);
+                }), layoutMenuRowParams());
+
+        final PopupWindow popup = new PopupWindow(menu, dp(200),
+                ViewGroup.LayoutParams.WRAP_CONTENT, false);
+        popup.setBackgroundDrawable(new ColorDrawable(0));
+        popup.setOutsideTouchable(true);
+        popup.setElevation(dp(8));
+        popup.setOnDismissListener(() -> {
+            if (layoutPopup == popup) layoutPopup = null;
+        });
+        layoutPopup = popup;
+        final View anchor = toolbar.toolButton(ImeToolbar.TOOL_LAYOUT);
+        popup.showAsDropDown(anchor != null ? anchor : toolbar, 0, dp(4));
+    }
+
+    private LinearLayout.LayoutParams layoutMenuRowParams() {
+        return new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+    }
+
+    private View menuDivider(KeyboardTheme palette) {
+        final View line = new View(this);
+        line.setBackgroundColor(palette.divider);
+        line.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
+        return line;
+    }
+
+    private View layoutMenuRow(String label, boolean checked,
+                               KeyboardTheme palette, View.OnClickListener click) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(20), 0, dp(14), 0);
+        row.setBackground(ripple(new GradientDrawable(), palette));
+        final TextView text = new TextView(this);
+        text.setText(label);
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        text.setTextColor(checked ? palette.accent : palette.candidateText);
+        text.setTypeface(Typeface.create("sans-serif",
+                checked ? Typeface.BOLD : Typeface.NORMAL));
+        text.setSingleLine(true);
+        text.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(text, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        if (checked) {
+            final ImageView check = new ImageView(this);
+            check.setImageResource(R.drawable.ic_check);
+            check.setImageTintList(ColorStateList.valueOf(palette.accent));
+            row.addView(check, new LinearLayout.LayoutParams(dp(20), dp(20)));
+        }
+        row.setOnClickListener(click);
+        return row;
+    }
+
+    private String layoutLabel(File chain) {
+        final String name = ChainStore.displayName(chain);
+        switch (name) {
+            case "default":
+                return getString(R.string.layout_pinyin);
+            case "shuangpin":
+                return getString(R.string.layout_shuangpin);
+            case "wubi":
+                return getString(R.string.layout_wubi);
+            case "t9":
+                return getString(R.string.layout_t9);
+            case "cangjie":
+                return getString(R.string.layout_cangjie);
+            default:
+                return name;
+        }
+    }
+
+    private void dismissLayoutMenu() {
+        if (layoutPopup == null) return;
+        final PopupWindow popup = layoutPopup;
+        layoutPopup = null;
+        popup.dismiss();
+    }
+
+    /**
+     * Switches the Chinese chain and rebuilds the generations. The old chain is
+     * reset first so the raw letters are committed, not reparsed by the new
+     * one. A chain that cannot build is rolled back: core would otherwise
+     * leave the keyboard on an empty generation.
+     */
+    private void selectLayoutChain(File chain) {
+        if (chain == null || !chain.isFile()) {
+            toast(R.string.layout_unavailable);
+            return;
+        }
+        try {
+            ChainStore.readChain(this, chain);
+        } catch (IOException error) {
+            toast(R.string.layout_unavailable);
+            return;
+        }
+        if (handwritingMode) setHandwritingLayout(false);
+        final String name = chain.getName();
+        if (name.equals(ChainStore.activeChainName(this))) return;
+        if (voiceActive) stopVoice();
+        finishCompositionAsRaw();
+        undoRuns.clear();
+        candidatesExpanded = false;
+        final String previous = ChainStore.activeChainName(this);
+        ChainStore.setActiveChain(this, name);
+        buildGenerations();
+        if (coreReady && chineseGeneration == 0 && !previous.isEmpty()) {
+            ChainStore.setActiveChain(this, previous);
+            buildGenerations();
+            toast(R.string.layout_unavailable);
+            return;
+        }
+        if (toolbar != null) toolbar.setLayoutActive(false);
+        updateCandidateRow();
+        Toast.makeText(this, getString(R.string.layout_switched,
+                layoutLabel(chain)), Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * Shows the handwriting surface in the key area. The persisted flag makes
+     * the choice survive a field switch and a view rebuild; the in-layout
+     * 键盘 button is the way back even when the toolbar has no tools.
+     */
+    private void setHandwritingLayout(boolean on) {
+        if (handwritingMode == on) return;
+        /* Set the mode first: the resets below already call
+         * updateCandidateRow(), and it must not flash the keys. */
+        handwritingMode = on;
+        Prefs.setHandwritingLayout(this, on);
+        if (toolbar != null) toolbar.setLayoutActive(on);
+        if (on) {
+            candidatesExpanded = false;
+            panelTab = TAB_FREQUENCY;
+            finishCompositionAsRaw();
+        }
+        clearHandwritingPad();
+        hideCandidates();
+        updateCandidateRow();
+    }
+
+    /**
+     * The handwriting layout: a result strip and its actions on top, the ink
+     * surface below. It replaces the keys in the same rectangle, so the editor
+     * never reflows when the layout is chosen.
+     */
+    private LinearLayout buildHandwritingLayout(KeyboardTheme palette) {
+        final LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(palette.board);
+        layout.setVisibility(View.GONE);
+
+        final LinearLayout resultRow = new LinearLayout(this);
+        resultRow.setOrientation(LinearLayout.HORIZONTAL);
+        resultRow.setGravity(Gravity.CENTER_VERTICAL);
+        resultRow.setBackgroundColor(palette.bar);
+        handwritingPadScroll = new HorizontalScrollView(this);
+        handwritingPadScroll.setHorizontalScrollBarEnabled(false);
+        handwritingPadBoard = new LinearLayout(this);
+        handwritingPadBoard.setOrientation(LinearLayout.HORIZONTAL);
+        handwritingPadScroll.addView(handwritingPadBoard,
+                new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+        resultRow.addView(handwritingPadScroll, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        resultRow.addView(padAction(R.string.ime_handwriting_undo, palette,
+                v -> handwritingPad.undo()), padActionParams());
+        resultRow.addView(padAction(R.string.ime_handwriting_clear, palette,
+                v -> handwritingPad.clear()), padActionParams());
+        resultRow.addView(padAction(R.string.ime_handwriting_delete, palette,
+                v -> passThrough(backspaceKey, null)), padActionParams());
+        /* Mandatory exit: the toolbar may be empty or the layout tool removed. */
+        resultRow.addView(padAction(R.string.layout_keyboard, palette,
+                v -> setHandwritingLayout(false)), padActionParams());
+        layout.addView(resultRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(HANDWRITING_RESULT_HEIGHT_DP)));
+
+        handwritingPad = new HandwritingView(this);
+        handwritingPad.setPalette(palette);
+        handwritingPad.setListener(this::onPadInkChanged);
+        layout.addView(handwritingPad, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        return layout;
+    }
+
+    private TextView padAction(int label, KeyboardTheme palette,
+                               View.OnClickListener click) {
+        final TextView action = barAction(label, palette, click);
+        action.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        action.setPadding(dp(8), 0, dp(8), 0);
+        return action;
+    }
+
+    private LinearLayout.LayoutParams padActionParams() {
+        return new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT);
+    }
+
+    private void onPadInkChanged(List<int[][]> strokes) {
+        handwritingPadMatches.clear();
+        if (!strokes.isEmpty() && strokes.get(0).length > 0) {
+            if (recognizer == null) {
+                recognizer = new HandwritingRecognizer(HanziData.get(this).templates());
+            }
+            handwritingPadMatches.addAll(recognizer.lookup(strokes, 20));
+        }
+        renderPadResults();
+    }
+
+    private void renderPadResults() {
+        if (handwritingPadBoard == null) return;
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        handwritingPadBoard.removeAllViews();
+        for (int at = 0; at < handwritingPadMatches.size(); ++at) {
+            final char hanzi = handwritingPadMatches.get(at).hanzi;
+            final TextView item = new TextView(this);
+            item.setText(String.valueOf(hanzi));
+            item.setTextSize(TypedValue.COMPLEX_UNIT_SP, at == 0 ? 20 : 19);
+            item.setTextColor(at == 0 ? palette.accent : palette.candidateText);
+            item.setTypeface(Typeface.create("sans-serif",
+                    at == 0 ? Typeface.BOLD : Typeface.NORMAL));
+            item.setGravity(Gravity.CENTER);
+            item.setSingleLine(true);
+            final GradientDrawable pill = new GradientDrawable();
+            pill.setCornerRadius(dp(16));
+            pill.setColor(at == 0 ? palette.accentSoft : 0);
+            item.setBackground(ripple(pill, palette));
+            item.setOnClickListener(v -> commitPadChar(hanzi));
+            handwritingPadBoard.addView(item, new LinearLayout.LayoutParams(
+                    dp(56), ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        if (handwritingPadScroll != null) handwritingPadScroll.scrollTo(0, 0);
+    }
+
+    /**
+     * A recognized character is committed directly: it has no index in the
+     * chain. The ink clears and the pad stays up for the next character.
+     * No refreshSurrounding(): association candidates would be generated
+     * behind the ink surface and pop up when the keys come back.
+     */
+    private void commitPadChar(char hanzi) {
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        ic.commitText(String.valueOf(hanzi), 1);
+        clearHandwritingPad();
+    }
+
+    private void clearHandwritingPad() {
+        handwritingPadMatches.clear();
+        if (handwritingPad != null) handwritingPad.clear();
+        if (handwritingPadBoard != null) handwritingPadBoard.removeAllViews();
     }
 
     @Override
@@ -1238,11 +1563,6 @@ public class PimeImeService extends InputMethodService
         });
     }
 
-    @Override
-    public void onPageChanged(boolean symbols) {
-        if (toolbar != null) toolbar.setSymbolsActive(symbols);
-    }
-
     /**
      * 中/英 switches the active generation: the Chinese chain chosen in
      * settings or the bundled English chain. A composition in flight is
@@ -1252,6 +1572,17 @@ public class PimeImeService extends InputMethodService
     @Override
     public void onLanguageChanged(boolean english) {
         Prefs.setEnglish(this, english);
+        if (toolbar != null) toolbar.setLanguageActive(english);
+        finishCompositionAsRaw();
+        activateForLanguage(english);
+    }
+
+    /**
+     * Cancels the live composition and commits the raw letters to the editor,
+     * then hides the candidate row. Used whenever the chain underneath the
+     * preedit changes (中/英, layout switch): what was typed is never eaten.
+     */
+    private void finishCompositionAsRaw() {
         final String raw = composition;
         if (coreReady) {
             /* `reset` is the chain contract for cancelling a composition: the
@@ -1262,7 +1593,6 @@ public class PimeImeService extends InputMethodService
         }
         composition = "";
         if (compositionView != null) compositionView.setText("");
-        if (toolbar != null) toolbar.setLanguageActive(english);
         hideCandidates();
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null && !raw.isEmpty()) {
@@ -1270,7 +1600,6 @@ public class PimeImeService extends InputMethodService
             ic.finishComposingText();
             ic.commitText(raw, 1);
         }
-        activateForLanguage(english);
     }
 
     /**
@@ -1351,6 +1680,8 @@ public class PimeImeService extends InputMethodService
      */
     private void refreshInputView() {
         if (keyboard == null) return;
+        /* The toolbar is rebuilt below, so a menu anchored to it must go. */
+        dismissLayoutMenu();
         setInputView(onCreateInputView());
         renderComposition();
         updateCandidateRow();
@@ -1358,9 +1689,11 @@ public class PimeImeService extends InputMethodService
         /* A rebuild starts with fresh views; when the table was open, put its
          * tabs, rail and rows back instead of leaving keyboard and panel
          * disagreeing about the rectangle. Ink does not survive a rebuild, so
-         * old handwriting results are dropped with it. */
+         * old handwriting results are dropped with it. The handwriting layout
+         * already owns the rectangle and must not restore the panel. */
         handwritingMatches.clear();
-        if (candidatesExpanded) {
+        handwritingPadMatches.clear();
+        if (candidatesExpanded && !handwritingMode) {
             keyboard.setVisibility(View.GONE);
             renderPanelGrid();
         }
@@ -1380,6 +1713,7 @@ public class PimeImeService extends InputMethodService
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        dismissLayoutMenu();
         cancelVoice();
         composition = "";
         undoRuns.clear();
@@ -1394,6 +1728,7 @@ public class PimeImeService extends InputMethodService
         railStroke = -1;
         handwritingMatches.clear();
         if (handwritingView != null) handwritingView.clear();
+        clearHandwritingPad();
         if (!coreReady) return;
 
         if (!core.hasSession() && !core.openSession()) {
@@ -1432,7 +1767,9 @@ public class PimeImeService extends InputMethodService
 
     @Override
     public void onFinishInput() {
+        dismissLayoutMenu();
         cancelVoice();
+        clearHandwritingPad();
         if (coreReady) {
             report(core.focus(false), "focus");
             report(core.reset(), "reset");
@@ -2034,6 +2371,7 @@ public class PimeImeService extends InputMethodService
     private void showCandidateMenu(View anchor, String word) {
         if (anchor == null || word == null || word.isEmpty()) return;
         dismissCandidateMenu();
+        dismissLayoutMenu();
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
         final LinearLayout menu = new LinearLayout(this);
@@ -2138,6 +2476,26 @@ public class PimeImeService extends InputMethodService
      */
     private void updateCandidateRow() {
         if (candidateRow == null) return;
+        /* The handwriting layout owns the whole key area: no keys, no strip,
+         * no table. The toolbar stays, because the band above the pad is
+         * otherwise empty. */
+        if (handwritingMode) {
+            candidateRow.setVisibility(View.GONE);
+            if (candidatePanel != null) candidatePanel.setVisibility(View.GONE);
+            if (keyboardDivider != null) keyboardDivider.setVisibility(View.GONE);
+            if (keyboard != null) keyboard.setVisibility(View.GONE);
+            if (handwritingLayoutView != null) {
+                handwritingLayoutView.setVisibility(View.VISIBLE);
+            }
+            if (toolbar != null) {
+                toolbar.setVisibility(toolbar.hasTools()
+                        ? View.VISIBLE : View.GONE);
+            }
+            return;
+        }
+        if (handwritingLayoutView != null) {
+            handwritingLayoutView.setVisibility(View.GONE);
+        }
         final boolean composing = !composition.isEmpty();
         if (compositionView != null) {
             compositionView.setVisibility(composing ? View.VISIBLE : View.GONE);
@@ -2215,6 +2573,7 @@ public class PimeImeService extends InputMethodService
      * the same rectangle also hosts the tabs and the handwriting surface.
      */
     private void toggleCandidatePanel() {
+        if (handwritingMode) return;
         if (!candidatesExpanded && candidates.isEmpty() && composition.isEmpty()) return;
         candidatesExpanded = !candidatesExpanded;
         if (candidatesExpanded) {

@@ -1809,3 +1809,32 @@ translate 3.5 ms、rank 8.7 ms、format 6.0 ms；`woshizhongguoren` 13.1 ms/次�
   空闲时工具栏正常显示；输入 `nihao` 后组合串与候选行出现、工具栏收起，键位
   不移动（键盘向上长高）；提交候选后工具栏回来；展开候选表格铺满键区、无溢出，
   折叠后恢复。
+
+### 工具栏键盘图标改为「键盘布局」切换（2026-11-18）
+
+工具栏的键盘图标原来只是字母/符号页切换，看起来却像“切换键盘”。现在它打开
+「键盘布局」菜单：手写 + 除 `english.cbor` 外的每条链（`default` 显示为
+「拼音 26 键」，`shuangpin/wubi/t9/cangjie` 显示中文名，其他链用文件名）。
+中/英仍是独立工具与底行「中|英」键，布局切换不碰它。
+
+- **工具改名与迁移**：`TOOL_SYMBOLS("symbols")` → `TOOL_LAYOUT("layout")`；
+  `Prefs.toolbarTools` 读取时把旧 `symbols` 映射成 `layout`，已有安装的顺序与
+  位置不变；文案改为「键盘布局 / 在拼音、手写等输入布局间切换」。
+- **菜单**：非聚焦 `PopupWindow`（与候选长按菜单同一模式，不抢输入焦点），
+  当前项强调色 + `ic_check`；点链先 `finishCompositionAsRaw()` 再
+  `ChainStore.setActiveChain` + `buildGenerations()`，建不起来的链回滚到原链并提示。
+- **手写布局**：`handwritingLayoutView` 与键盘同高、互斥显示；结果条（撤销/清空/
+  退格/键盘）+ `HandwritingView`。选字直接 `commitText`，墨迹清空后停留手写；
+  「键盘」按钮保证工具栏为空或被删掉布局工具时仍能退出。布局选择存
+  `Prefs.handwriting_layout`，主题/旋转重建后保持。
+- **状态机**：`updateCandidateRow()` 顶部加手写分支；`toggleCandidatePanel()`、
+  `refreshInputView()` 的面板恢复都排除手写模式。
+- **验证**：`assembleDebug`、`testDebugUnitTest` 通过，并装到 MuMu 12
+  （1080×1920，debug）实测：菜单列出「拼音 26 键」（勾）与「手写」；切手写后
+  键盘/候选行/分隔线隐藏、手写板与撤销/清空/退格/键盘出现、IME 总高不变、
+  布局图标高亮；画「一」出「一、丨」、点选上屏并清空墨迹仍停手写；退格删掉
+  刚上屏的字；两笔后「撤销」只去掉第二笔；「清空」清掉墨迹与结果；「键盘」
+  回到 QWERTY、高亮消失；`nihao` 候选与 `#`/`A` 翻页、`中|英` 切换均不受影响；
+  旧配置 `toolbar_tools=symbols,settings,paste,hide` 原位显示为「键盘布局」，
+  定制页「未启用」只剩中/英与语音；切深色主题触发视图重建后仍停在手写、
+  墨迹为空、面板未复现。

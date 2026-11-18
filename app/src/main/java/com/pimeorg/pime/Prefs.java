@@ -118,7 +118,11 @@ public final class Prefs {
             return new ArrayList<>(Arrays.asList(ImeToolbar.DEFAULT_TOOLS));
         }
         final List<String> tools = new ArrayList<>();
-        for (String id : raw.split(",")) {
+        for (String stored : raw.split(",")) {
+            /* The keyboard tool used to be "symbols"; it now opens the layout
+             * chooser. Mapping on read keeps existing orders and positions. */
+            final String id = "symbols".equals(stored)
+                    ? ImeToolbar.TOOL_LAYOUT : stored;
             if (ImeToolbar.isTool(id) && !tools.contains(id)) tools.add(id);
         }
         return tools;
@@ -196,6 +200,19 @@ public final class Prefs {
 
     public static void setActiveChain(Context context, String name) {
         prefs(context).edit().putString("active_chain", name).apply();
+    }
+
+    /**
+     * True while the key area shows the handwriting layout instead of the
+     * keys. Persisted so the chosen layout survives a field switch or a view
+     * rebuild; picking any chain clears it.
+     */
+    public static boolean handwritingLayout(Context context) {
+        return prefs(context).getBoolean("handwriting_layout", false);
+    }
+
+    public static void setHandwritingLayout(Context context, boolean value) {
+        prefs(context).edit().putBoolean("handwriting_layout", value).apply();
     }
 
     /**
