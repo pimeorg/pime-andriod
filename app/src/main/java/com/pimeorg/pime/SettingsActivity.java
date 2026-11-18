@@ -1372,6 +1372,17 @@ public final class SettingsActivity extends AppCompatActivity {
             addRow(resetCard, R.drawable.ic_restore,
                     getString(R.string.toolbar_reset), getString(R.string.toolbar_reset_desc),
                     0, v -> resetToolbar());
+
+            /* The toolbar key leads here now, so keep the rest of the keyboard
+             * settings one tap away instead of making the user leave and
+             * reopen the launcher. */
+            final View settingsSpacer = new View(this);
+            parent.addView(settingsSpacer, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(16)));
+            final LinearLayout settingsCard = addCard(parent);
+            addRow(settingsCard, R.drawable.ic_tune,
+                    getString(R.string.row_settings), getString(R.string.row_settings_desc),
+                    R.drawable.ic_chevron_right, v -> openSettings());
         });
     }
 

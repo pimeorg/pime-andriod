@@ -105,7 +105,7 @@
     <string name="theme_dark">深色</string>
     <string name="row_toolbar">工具栏</string>
     <string name="row_toolbar_desc">已显示 %1$d 个按钮，可启停与排序</string>
-    <string name="toolbar_note">工具栏在候选栏上方，图标从左到右按这里的顺序排列。长按每行的拖动把手即可调整顺序；点按图标执行动作，长按图标也能回到这个页面（语音键除外，那里长按就是说话）；把工具全部关闭，工具栏就会收起，把位置让给键盘。</string>
+    <string name="toolbar_note">工具栏在候选栏上方，图标从左到右按这里的顺序排列。长按每行的拖动把手即可调整顺序；点按图标执行动作，长按图标也能回到这个页面（语音键除外，那里长按就是说话）；「工具栏设置」键点按直接打开这一页。把工具全部关闭，工具栏就会收起，把位置让给键盘。</string>
     <string name="toolbar_enabled">已启用（%1$d）</string>
     <string name="toolbar_disabled">未启用（%1$d）</string>
     <string name="toolbar_empty">还没有启用任何工具。用下面的开关添加。</string>
@@ -126,8 +126,8 @@
     <string name="tool_paste_desc">把剪贴板里的文字插入编辑器</string>
     <string name="tool_candidates">展开候选</string>
     <string name="tool_candidates_desc">把键区让给候选表格，内含手写找字</string>
-    <string name="tool_settings">键盘设置</string>
-    <string name="tool_settings_desc">打开键盘与候选的设置页</string>
+    <string name="tool_settings">工具栏设置</string>
+    <string name="tool_settings_desc">打开工具栏定制页，调整显示与顺序</string>
     <string name="tool_hide">收起键盘</string>
     <string name="tool_hide_desc">把输入法键盘收起来</string>
     <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏、拼音分隔、主题与工具栏）；分词、词典与候选排序由插件链决定。长按候选可固定首位或删除该词，记录在本机。</string>

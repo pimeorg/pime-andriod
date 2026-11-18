@@ -988,7 +988,9 @@ public class PimeImeService extends InputMethodService
                 pasteClipboard();
                 break;
             case ImeToolbar.TOOL_SETTINGS:
-                openSettings();
+                /* The gear sits on the toolbar, so it configures the toolbar
+                 * itself rather than the whole keyboard settings app. */
+                openToolbarSettings();
                 break;
             case ImeToolbar.TOOL_HIDE:
                 requestHideSelf(0);
@@ -1001,6 +1003,17 @@ public class PimeImeService extends InputMethodService
     /** Long-pressing a toolbar icon is the shortcut to the customization page. */
     @Override
     public void onCustomize() {
+        openToolbarSettings();
+    }
+
+    /**
+     * Opening the settings activity while the keyboard window is still up left
+     * the IME drawn over the page, and on the way back the server believed it
+     * was already visible so tapping a field no longer brought it up. Hide the
+     * keyboard first; the next tap on a field shows it again as usual.
+     */
+    private void openToolbarSettings() {
+        requestHideSelf(0);
         openSettings(SettingsActivity.PAGE_TOOLBAR);
     }
 
@@ -1306,10 +1319,6 @@ public class PimeImeService extends InputMethodService
         cell.setCornerRadius(dp(14));
         cell.setColor(active ? palette.accentSoft : 0);
         return ripple(cell, palette);
-    }
-
-    private void openSettings() {
-        openSettings(null);
     }
 
     /** Opens the launcher straight on a detail page ("toolbar"), or home. */
