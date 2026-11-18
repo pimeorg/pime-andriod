@@ -8,7 +8,10 @@ import androidx.appcompat.app.AppCompatDelegate;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Host-level display preferences: theme, keyboard size and key feedback, and how
@@ -138,6 +141,39 @@ public final class Prefs {
 
     public static void setKeyboardPercent(Context context, int value) {
         prefs(context).edit().putInt("keyboard_percent", value).apply();
+    }
+
+    /**
+     * Candidate overrides recorded by long-pressing a word: the pinned word
+     * (shown first) and the words hidden from that code's list. They are keyed
+     * by the host's candidate scope, which is the composition (or the
+     * prediction list), and deliberately live outside the plugin chain: they
+     * are per-device user choices about the visible list, not language data.
+     */
+    public static String candidatePin(Context context, String scope) {
+        return prefs(context).getString("candidate_pin/" + scope, null);
+    }
+
+    public static void setCandidatePin(Context context, String scope, String word) {
+        prefs(context).edit().putString("candidate_pin/" + scope, word).apply();
+    }
+
+    public static void clearCandidatePin(Context context, String scope) {
+        prefs(context).edit().remove("candidate_pin/" + scope).apply();
+    }
+
+    public static Set<String> candidateHidden(Context context, String scope) {
+        final Set<String> stored = prefs(context).getStringSet(
+                "candidate_hidden/" + scope, null);
+        return stored == null ? Collections.emptySet() : new HashSet<>(stored);
+    }
+
+    public static void hideCandidate(Context context, String scope, String word) {
+        final Set<String> hidden = new HashSet<>(candidateHidden(context, scope));
+        if (!hidden.add(word)) return;
+        prefs(context).edit()
+                .putStringSet("candidate_hidden/" + scope, hidden)
+                .apply();
     }
 
     /**

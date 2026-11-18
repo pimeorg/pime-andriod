@@ -11,6 +11,7 @@ import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Paint;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
@@ -44,6 +45,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -57,7 +59,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Android host for pime-core.
@@ -260,6 +264,8 @@ public class PimeImeService extends InputMethodService
     private final List<String> candidates = new ArrayList<>();
     /** Candidate count the next chain run builds; see CANDIDATE_FOLDED_SIZE. */
     private int candidateBudget = CANDIDATE_FOLDED_SIZE;
+    /** Long-press candidate menu; non-focusable so the IME keeps the editor. */
+    private PopupWindow candidatePopup;
     /**
      * First candidate the folded strip draws when the preference caps it at
      * 3/5/7/9. The chain hands over its whole list in one page, so paging the
@@ -482,6 +488,7 @@ public class PimeImeService extends InputMethodService
 
     @Override
     public void onDestroy() {
+        dismissCandidateMenu();
         cancelVoice();
         if (rebuildReceiver != null) {
             unregisterReceiver(rebuildReceiver);
@@ -1441,10 +1448,12 @@ public class PimeImeService extends InputMethodService
          * that window instead of the hidden head of the chain's single page. */
         if (!english && coreReady && core.hasSession()
                 && key.kind == KeyboardView.KIND_SPACE
-                && stripOffset > 0 && !composition.isEmpty()
-                && !candidates.isEmpty()) {
-            selectCandidate(stripOffset);
-            return;
+                && stripOffset > 0 && !composition.isEmpty()) {
+            final CandidateEntry entry = stripCandidateAt(stripOffset);
+            if (entry != null) {
+                selectStripCandidate(entry);
+                return;
+            }
         }
 
         /* English shares the chain path. The bundled English chain is only
@@ -1796,11 +1805,13 @@ public class PimeImeService extends InputMethodService
      * global indexes and space/digit selection rely on.
      */
     private void pageCandidates(boolean forward) {
-        if (candidatesExpanded || collecting || candidates.isEmpty()) return;
+        if (candidatesExpanded || collecting) return;
         final int limit = Prefs.candidates(this);
         if (limit <= 0) return;
+        final int size = candidateEntries().size();
+        if (size == 0) return;
         final int next = stripOffset + (forward ? limit : -limit);
-        if (next < 0 || next >= candidates.size()) return;
+        if (next < 0 || next >= size) return;
         stripOffset = next;
         renderStrip();
         updateCandidateRow();
@@ -1917,7 +1928,8 @@ public class PimeImeService extends InputMethodService
         if (candidateBar == null) return;
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
-        final int size = candidates.size();
+        final List<CandidateEntry> entries = candidateEntries();
+        final int size = entries.size();
         final int limit = Prefs.candidates(this);
         if (stripOffset < 0 || stripOffset >= size) stripOffset = 0;
         final int start = limit > 0 ? stripOffset : 0;
@@ -1932,7 +1944,7 @@ public class PimeImeService extends InputMethodService
                 stripViews.add(item);
                 candidateBar.addView(item);
             }
-            bindCandidateItem(item, candidates.get(i), i, i == start, palette);
+            bindCandidateItem(item, entries.get(i), i == start, palette);
             item.setVisibility(View.VISIBLE);
             ++used;
         }
@@ -1940,6 +1952,167 @@ public class PimeImeService extends InputMethodService
             stripViews.get(i).setVisibility(View.GONE);
         }
         candidateScroll.scrollTo(0, 0);
+    }
+
+    /**
+     * The code a candidate list belongs to. Pins and deletions are remembered
+     * per code (and per language), so promoting 你好 for {@code nihao} does not
+     * reorder every other composition. With no composition the list is the
+     * predictor's, and the scope is the shared prediction list.
+     */
+    private String candidateScope() {
+        final boolean english = keyboard != null
+                ? keyboard.isEnglish() : Prefs.english(this);
+        final String language = english ? "en:" : "zh:";
+        if (composition.isEmpty()) return language + "predict";
+        return language + composition.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * The chain's candidates with the user's long-press overrides applied.
+     * {@link CandidateEntry#rawIndex} still points into {@code candidates}, so
+     * a tap selects exactly the word the chain knows by that index even after
+     * a pin moved it to the front or a deletion removed entries around it.
+     */
+    private List<CandidateEntry> candidateEntries() {
+        final List<CandidateEntry> entries = new ArrayList<>(candidates.size());
+        if (candidates.isEmpty()) return entries;
+        final String scope = candidateScope();
+        final Set<String> hidden = Prefs.candidateHidden(this, scope);
+        final String pinned = Prefs.candidatePin(this, scope);
+        CandidateEntry pinnedEntry = null;
+        for (int i = 0; i < candidates.size(); ++i) {
+            final String word = candidates.get(i);
+            if (hidden.contains(word)) continue;
+            final CandidateEntry entry = new CandidateEntry(word, i);
+            if (pinnedEntry == null && pinned != null && pinned.equals(word)) {
+                pinnedEntry = entry;
+            } else {
+                entries.add(entry);
+            }
+        }
+        if (pinnedEntry != null) entries.add(0, pinnedEntry);
+        return entries;
+    }
+
+    /** One visible strip slot, or null when the window moved past the list. */
+    private CandidateEntry stripCandidateAt(int position) {
+        final List<CandidateEntry> entries = candidateEntries();
+        return position >= 0 && position < entries.size()
+                ? entries.get(position) : null;
+    }
+
+    private void selectStripCandidate(CandidateEntry entry) {
+        if (entry == null) return;
+        if (composition.isEmpty()) commitPrediction(entry.rawIndex);
+        else selectCandidate(entry.rawIndex);
+    }
+
+    /**
+     * Long-press actions on one candidate: keep it at the head of this code's
+     * list, or take it out of the list. Both are local preferences, so the
+     * chain and its dictionaries are left untouched.
+     *
+     * <p>A normal PopupMenu is focusable, and opening one takes focus from the
+     * IME: the editor finishes the composition and the candidate row vanishes
+     * before the action runs. This menu is a non-focusable PopupWindow, so the
+     * input session stays put while it is open.
+     */
+    private void showCandidateMenu(View anchor, String word) {
+        if (anchor == null || word == null || word.isEmpty()) return;
+        dismissCandidateMenu();
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        final LinearLayout menu = new LinearLayout(this);
+        menu.setOrientation(LinearLayout.VERTICAL);
+        final GradientDrawable fill = new GradientDrawable();
+        fill.setColor(palette.panel);
+        fill.setCornerRadius(dp(12));
+        fill.setStroke(Math.max(1, dp(1) / 2), palette.divider);
+        menu.setBackground(fill);
+        menu.setPadding(0, dp(4), 0, dp(4));
+
+        final TextView pin = candidateMenuRow(R.string.candidate_pin_first, palette);
+        final String scope = candidateScope();
+        pin.setOnClickListener(v -> {
+            dismissCandidateMenu();
+            pinCandidate(word, scope);
+        });
+        menu.addView(pin, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        final View line = new View(this);
+        line.setBackgroundColor(palette.divider);
+        menu.addView(line, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
+        final TextView delete = candidateMenuRow(R.string.candidate_delete, palette);
+        delete.setOnClickListener(v -> {
+            dismissCandidateMenu();
+            deleteCandidate(word, scope);
+        });
+        menu.addView(delete, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+
+        final PopupWindow popup = new PopupWindow(menu,
+                dp(176), ViewGroup.LayoutParams.WRAP_CONTENT, false);
+        popup.setBackgroundDrawable(new ColorDrawable(0));
+        popup.setOutsideTouchable(true);
+        popup.setElevation(dp(8));
+        popup.setOnDismissListener(() -> {
+            if (candidatePopup == popup) candidatePopup = null;
+        });
+        candidatePopup = popup;
+        popup.showAsDropDown(anchor, 0, dp(4));
+    }
+
+    private TextView candidateMenuRow(int text, KeyboardTheme palette) {
+        final TextView row = new TextView(this);
+        row.setText(text);
+        row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        row.setTextColor(palette.candidateText);
+        row.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        row.setSingleLine(true);
+        row.setPadding(dp(20), 0, dp(20), 0);
+        row.setBackground(ripple(new GradientDrawable(), palette));
+        return row;
+    }
+
+    private void dismissCandidateMenu() {
+        if (candidatePopup == null) return;
+        final PopupWindow popup = candidatePopup;
+        candidatePopup = null;
+        popup.dismiss();
+    }
+
+    private void pinCandidate(String word, String scope) {
+        if (word == null || word.isEmpty() || scope == null) return;
+        Prefs.setCandidatePin(this, scope, word);
+        /* The pinned word belongs at the head of the whole list, not just the
+         * display window the finger was in. */
+        stripOffset = 0;
+        toast(R.string.candidate_pinned);
+        refreshCandidateOverrides();
+    }
+
+    private void deleteCandidate(String word, String scope) {
+        if (word == null || word.isEmpty() || scope == null) return;
+        Prefs.hideCandidate(this, scope, word);
+        if (word.equals(Prefs.candidatePin(this, scope))) {
+            Prefs.clearCandidatePin(this, scope);
+        }
+        toast(R.string.candidate_deleted);
+        refreshCandidateOverrides();
+    }
+
+    /** Redraws the list that is currently on screen after a long-press action. */
+    private void refreshCandidateOverrides() {
+        if (candidatesExpanded && panelTab != TAB_HANDWRITING) {
+            renderStrip();
+            renderGrid();
+        } else {
+            renderStrip();
+        }
+        updateCandidateRow();
     }
 
     /**
@@ -1954,7 +2127,7 @@ public class PimeImeService extends InputMethodService
         if (compositionView != null) {
             compositionView.setVisibility(composing ? View.VISIBLE : View.GONE);
         }
-        final boolean hasCandidates = !candidates.isEmpty();
+        final boolean hasCandidates = !candidateEntries().isEmpty();
         /* The chevron also opens the handwriting tab, which works with no
          * candidate list at all; association-only candidates still justify the
          * table (they commit by text, without a chain index). */
@@ -2148,6 +2321,18 @@ public class PimeImeService extends InputMethodService
         long at = SystemClock.uptimeMillis();
     }
 
+    /** One folded-strip slot and the index that still selects it in the chain. */
+    private static final class CandidateEntry {
+        final String text;
+        /** Offset in {@code candidates}; predictions commit by text instead. */
+        final int rawIndex;
+
+        CandidateEntry(String text, int rawIndex) {
+            this.text = text;
+            this.rawIndex = rawIndex;
+        }
+    }
+
     /** One visible cell and the index that picks it. */
     private static final class GridEntry {
         final String text;
@@ -2168,14 +2353,25 @@ public class PimeImeService extends InputMethodService
      */
     private List<GridEntry> baseEntries() {
         final List<GridEntry> entries = new ArrayList<>();
+        final String scope = candidateScope();
+        final Set<String> hidden = Prefs.candidateHidden(this, scope);
+        final String pinned = Prefs.candidatePin(this, scope);
+        GridEntry pinnedEntry = null;
         int index = 0;
         for (List<String> page : gridPages) {
             for (String text : page) {
                 final int global = index++;
+                if (hidden.contains(text)) continue;
                 if (panelTab == TAB_SINGLE && !isSingleHanzi(text)) continue;
-                entries.add(new GridEntry(text, global));
+                final GridEntry entry = new GridEntry(text, global);
+                if (pinnedEntry == null && pinned != null && pinned.equals(text)) {
+                    pinnedEntry = entry;
+                } else {
+                    entries.add(entry);
+                }
             }
         }
+        if (pinnedEntry != null) entries.add(0, pinnedEntry);
         return entries;
     }
 
@@ -2486,6 +2682,10 @@ public class PimeImeService extends InputMethodService
         fill.setColor(0);
         item.setBackground(ripple(fill, palette));
         item.setOnClickListener(v -> pickEntry(entry));
+        item.setOnLongClickListener(v -> {
+            showCandidateMenu(v, entry.text);
+            return true;
+        });
         return item;
     }
 
@@ -2625,6 +2825,7 @@ public class PimeImeService extends InputMethodService
     }
 
     private void hideCandidates() {
+        dismissCandidateMenu();
         candidates.clear();
         stripOffset = 0;
         /* The handwriting surface is not tied to a candidate list: a chain
@@ -2664,9 +2865,9 @@ public class PimeImeService extends InputMethodService
      * The first visible candidate gets the accent pill; the rest are plain, so
      * the eye lands on the one a tap on space would take.
      */
-    private void bindCandidateItem(TextView item, String text, int index,
+    private void bindCandidateItem(TextView item, CandidateEntry entry,
                                    boolean first, KeyboardTheme palette) {
-        item.setText(text);
+        item.setText(entry.text);
         item.setTextSize(TypedValue.COMPLEX_UNIT_SP, first ? 20 : 19);
         item.setTextColor(first ? palette.accent : palette.candidateText);
         item.setTypeface(Typeface.create("sans-serif",
@@ -2675,7 +2876,11 @@ public class PimeImeService extends InputMethodService
         pill.setCornerRadius(dp(18));
         pill.setColor(first ? palette.accentSoft : 0);
         item.setBackground(ripple(pill, palette));
-        item.setOnClickListener(v -> selectCandidate(index));
+        item.setOnClickListener(v -> selectStripCandidate(entry));
+        item.setOnLongClickListener(v -> {
+            showCandidateMenu(v, entry.text);
+            return true;
+        });
         final LinearLayout.LayoutParams params =
                 (LinearLayout.LayoutParams) item.getLayoutParams();
         params.setMargins(dp(4), dp(7), first ? dp(4) : 0, dp(7));

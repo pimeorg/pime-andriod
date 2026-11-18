@@ -130,7 +130,7 @@
     <string name="tool_settings_desc">打开键盘与候选的设置页</string>
     <string name="tool_hide">收起键盘</string>
     <string name="tool_hide_desc">把输入法键盘收起来</string>
-    <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏、拼音分隔、主题与工具栏），不改变分词、词典与候选排序——那些由插件链决定。</string>
+    <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏、拼音分隔、主题与工具栏）；分词、词典与候选排序由插件链决定。长按候选可固定首位或删除该词，记录在本机。</string>
 
     <string name="ime_action_settings">键盘设置</string>
     <string name="ime_action_hide">收起键盘</string>
@@ -142,6 +142,10 @@
     <string name="ime_action_expand">展开候选</string>
     <string name="ime_action_delete">删除前一个字</string>
     <string name="ime_action_collapse">收起候选</string>
+    <string name="candidate_pin_first">固定首位</string>
+    <string name="candidate_delete">删除该候选词</string>
+    <string name="candidate_pinned">已固定到首位</string>
+    <string name="candidate_deleted">已删除该候选词</string>
     <string name="ime_tab_frequency">词频</string>
     <string name="ime_tab_single">单字</string>
     <string name="ime_tab_handwriting">手写找字</string>
