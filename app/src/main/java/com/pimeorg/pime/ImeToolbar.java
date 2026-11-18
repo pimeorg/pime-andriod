@@ -19,9 +19,10 @@ import java.util.List;
 /**
  * Toolbar above the keys, in the spirit of WeaveText's idle top bar: one evenly
  * spread icon cell per host action, a soft rounded highlight for the active
- * one and a ripple for the press. The toolbar stays put while composing; the
- * composition and candidates get their own row below it, so settings and
- * collapse never move as the candidate strip comes and goes.
+ * one and a ripple for the press. It shares a single band with the candidate
+ * row: while a preedit or candidates are showing, the row owns the band and the
+ * toolbar steps aside, so the keys never sit under two bars at once. The
+ * toolbar comes back as soon as the row goes away.
  *
  * <p>Which tools show, and in what order, is the user's: the settings page
  * (or a long press on an icon; the voice key's long press is the utterance)
@@ -35,7 +36,6 @@ final class ImeToolbar extends LinearLayout {
     static final String TOOL_LANGUAGE = "language";
     static final String TOOL_VOICE = "voice";
     static final String TOOL_PASTE = "paste";
-    static final String TOOL_CANDIDATES = "candidates";
     static final String TOOL_SETTINGS = "settings";
     static final String TOOL_HIDE = "hide";
 
@@ -45,7 +45,6 @@ final class ImeToolbar extends LinearLayout {
             TOOL_LANGUAGE,
             TOOL_VOICE,
             TOOL_PASTE,
-            TOOL_CANDIDATES,
             TOOL_SETTINGS,
             TOOL_HIDE,
     };
@@ -268,8 +267,6 @@ final class ImeToolbar extends LinearLayout {
                 return R.drawable.ic_mic;
             case TOOL_PASTE:
                 return R.drawable.ic_clipboard;
-            case TOOL_CANDIDATES:
-                return R.drawable.ic_expand_more;
             case TOOL_SETTINGS:
                 return R.drawable.ic_settings;
             default:
@@ -287,8 +284,6 @@ final class ImeToolbar extends LinearLayout {
                 return R.string.tool_voice;
             case TOOL_PASTE:
                 return R.string.tool_paste;
-            case TOOL_CANDIDATES:
-                return R.string.tool_candidates;
             case TOOL_SETTINGS:
                 return R.string.tool_settings;
             default:
@@ -306,8 +301,6 @@ final class ImeToolbar extends LinearLayout {
                 return R.string.tool_voice_desc;
             case TOOL_PASTE:
                 return R.string.tool_paste_desc;
-            case TOOL_CANDIDATES:
-                return R.string.tool_candidates_desc;
             case TOOL_SETTINGS:
                 return R.string.tool_settings_desc;
             default:

@@ -511,9 +511,11 @@ public class PimeImeService extends InputMethodService
         root.setBackgroundColor(palette.board);
 
         /* Toolbar: the same evenly spread icon row WeaveText keeps above its
-         * keys. It stays in place while composing, so settings and collapse
-         * never move as the candidate row comes and goes. Its tools and their
-         * order come from Prefs; removing all of them gives the room to keys. */
+         * keys. It shares one band with the candidate row rather than stacking
+         * above it: while a preedit or candidates are showing, the row owns the
+         * band and the toolbar steps aside, so the keys never sit under two
+         * bars at once. Its tools and their order come from Prefs; removing all
+         * of them gives the room to keys. */
         toolbar = new ImeToolbar(this, palette, Prefs.toolbarTools(this));
         toolbar.setListener(this);
         root.addView(toolbar, new LinearLayout.LayoutParams(
@@ -603,7 +605,12 @@ public class PimeImeService extends InputMethodService
         root.addView(candidatePanel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeight));
 
-        root.setMinimumHeight(toolbarHeight() + keyboardHeight);
+        /* The toolbar and the candidate row swap within one band, so reserve
+         * the taller of the two: the slack sits above the bar and the keys do
+         * not move as the row comes and goes. */
+        final int barBand = toolbar.hasTools()
+                ? Math.max(toolbarHeight(), dp(CANDIDATE_ROW_HEIGHT_DP)) : 0;
+        root.setMinimumHeight(barBand + keyboardHeight);
         return root;
     }
 
@@ -980,9 +987,6 @@ public class PimeImeService extends InputMethodService
                 break;
             case ImeToolbar.TOOL_LANGUAGE:
                 if (keyboard != null) keyboard.toggleLanguage();
-                break;
-            case ImeToolbar.TOOL_CANDIDATES:
-                toggleCandidatePanel();
                 break;
             case ImeToolbar.TOOL_PASTE:
                 pasteClipboard();
@@ -2125,10 +2129,12 @@ public class PimeImeService extends InputMethodService
     }
 
     /**
-     * The stack under the toolbar carries the preedit line above the candidate
+     * The band above the keys carries the preedit line above the candidate
      * strip, either alone, or nothing; it only takes height when it has
-     * something to say. The table and the keys are mutually exclusive views of
-     * the same rectangle, so nothing here changes the input view's height.
+     * something to say, and while it does the toolbar is folded away into the
+     * same band. The table and the keys are mutually exclusive views of the
+     * same rectangle, so unfolding swaps one for the other without moving the
+     * keys off their row.
      */
     private void updateCandidateRow() {
         if (candidateRow == null) return;
@@ -2145,6 +2151,10 @@ public class PimeImeService extends InputMethodService
             candidatesExpanded = false;
         }
         final boolean unfolded = candidatesExpanded;
+        /* The row and the toolbar share one band: whichever has something to
+         * say gets it. A preedit or candidates mean the row is up, so the
+         * toolbar gives the band away until typing stops. */
+        final boolean rowVisible = composing || hasCandidates || unfolded;
         if (expandButton != null) {
             /* The open table has its own chevron on the category line, so the
              * strip's goes away with the strip. */
@@ -2166,11 +2176,13 @@ public class PimeImeService extends InputMethodService
         if (candidatePanel != null) {
             candidatePanel.setVisibility(unfolded ? View.VISIBLE : View.GONE);
             final ViewGroup.LayoutParams params = candidatePanel.getLayoutParams();
-            /* The toolbar (and the hairline under the candidate row) belong to
-             * typing; the table gives them up so the panel is just the preedit
-             * line, the category track and candidates, as WeChat draws it. */
+            /* The key area and the candidate strip's line are what the table
+             * takes over; the toolbar is already gone whenever the row is up,
+             * and the hairline goes with the keys. The panel then holds just
+             * the preedit line, the category track and candidates, as WeChat
+             * draws it. */
             final int room = keyAreaHeight + dp(CANDIDATE_ROW_HEIGHT_DP)
-                    + toolbarHeight() + Math.max(1, dp(1) / 2);
+                    + Math.max(1, dp(1) / 2);
             final int tall = dp(GRID_ROW_HEIGHT_DP);
             final int chrome = dp(TAB_ROW_HEIGHT_DP) + Math.max(1, dp(1) / 2);
             /* Whole rows only: the pinned last band (delete + 首笔画) has to sit
@@ -2184,7 +2196,7 @@ public class PimeImeService extends InputMethodService
             }
         }
         if (toolbar != null) {
-            toolbar.setVisibility(unfolded || !toolbar.hasTools()
+            toolbar.setVisibility(rowVisible || !toolbar.hasTools()
                     ? View.GONE : View.VISIBLE);
         }
         if (keyboardDivider != null) {
@@ -2193,8 +2205,7 @@ public class PimeImeService extends InputMethodService
         if (keyboard != null) {
             keyboard.setVisibility(unfolded ? View.GONE : View.VISIBLE);
         }
-        candidateRow.setVisibility(composing || hasCandidates || unfolded
-                ? View.VISIBLE : View.GONE);
+        candidateRow.setVisibility(rowVisible ? View.VISIBLE : View.GONE);
     }
 
     /**
