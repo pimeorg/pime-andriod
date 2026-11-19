@@ -205,9 +205,6 @@ public class PimeImeService extends InputMethodService
     private boolean handwritingMode;
     private LinearLayout handwritingLayoutView;
     private HandwritingView handwritingPad;
-    /** Candidate strip on the pad's top line, beside 全屏 and the delete key. */
-    private HorizontalScrollView handwritingPadScroll;
-    private LinearLayout handwritingPadBoard;
     private final List<HandwritingRecognizer.Match> handwritingPadMatches =
             new ArrayList<>();
     /** 全屏 label; tapping it lets the pad take the whole window. */
@@ -786,6 +783,9 @@ public class PimeImeService extends InputMethodService
         candidateBar = new LinearLayout(this);
         candidateBar.setOrientation(LinearLayout.HORIZONTAL);
         candidateBar.setGravity(Gravity.CENTER_VERTICAL);
+        /* The recycled item views belonged to the bar that is being replaced;
+         * a rebuild starts with a fresh strip. */
+        stripViews.clear();
         /* WRAP_CONTENT, not MATCH_PARENT: the mixed Chinese/English view can
          * be wider than the screen, and a viewport-wide bar has no scroll
          * range to drag. */
@@ -1652,9 +1652,10 @@ public class PimeImeService extends InputMethodService
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
-        /* Top line: 全屏 · candidates · ⌫, the way WeChat lays its full-screen
-         * handwriting page out. The candidates land here instead of the
-         * keyboard's candidate row, which stays folded away with the keys. */
+        /* Top line: 全屏 at the left, ⌫ in the rail's column at the right.
+         * The recognition results do not live here: they use the keyboard's
+         * own candidate row above the key area, so handwriting and pinyin
+         * show candidates in exactly the same place and style. */
         final LinearLayout topRow = new LinearLayout(this);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -1671,16 +1672,7 @@ public class PimeImeService extends InputMethodService
         topRow.addView(handwritingFullscreenButton, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
-
-        handwritingPadScroll = new HorizontalScrollView(this);
-        handwritingPadScroll.setHorizontalScrollBarEnabled(false);
-        handwritingPadBoard = new LinearLayout(this);
-        handwritingPadBoard.setOrientation(LinearLayout.HORIZONTAL);
-        handwritingPadBoard.setGravity(Gravity.CENTER_VERTICAL);
-        handwritingPadScroll.addView(handwritingPadBoard,
-                new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT));
-        topRow.addView(handwritingPadScroll, new LinearLayout.LayoutParams(
+        topRow.addView(new View(this), new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         final ImageButton padDelete = new ImageButton(this);
@@ -1694,8 +1686,10 @@ public class PimeImeService extends InputMethodService
             keyFeedback(v);
             padDeletePressed();
         });
+        /* Exactly the punctuation rail's width, so the delete key sits in the
+         * same column as the marks below it. */
         topRow.addView(padDelete, new LinearLayout.LayoutParams(
-                dp(HANDWRITING_RESULT_HEIGHT_DP),
+                dp(HANDWRITING_RAIL_WIDTH_DP),
                 ViewGroup.LayoutParams.MATCH_PARENT));
         padArea.addView(topRow, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1949,34 +1943,37 @@ public class PimeImeService extends InputMethodService
         renderPadResults();
     }
 
+    /**
+     * Paints the recognition results into the keyboard's own candidate strip.
+     * The views, the first-candidate pill and the sizes come from the same
+     * code pinyin uses, so the row looks identical in both layouts.
+     */
     private void renderPadResults() {
-        if (handwritingPadBoard == null) return;
+        if (candidateBar == null) return;
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
-        handwritingPadBoard.removeAllViews();
+        int used = 0;
         for (int at = 0; at < handwritingPadMatches.size(); ++at) {
             final char hanzi = handwritingPadMatches.get(at).hanzi;
-            final TextView item = new TextView(this);
-            item.setText(String.valueOf(hanzi));
-            item.setTextSize(TypedValue.COMPLEX_UNIT_SP, at == 0 ? 20 : 19);
-            item.setTextColor(at == 0 ? palette.accent : palette.candidateText);
-            item.setTypeface(Typeface.create("sans-serif",
-                    at == 0 ? Typeface.BOLD : Typeface.NORMAL));
-            item.setGravity(Gravity.CENTER);
-            item.setSingleLine(true);
-            item.setPadding(dp(14), 0, dp(14), 0);
-            final GradientDrawable pill = new GradientDrawable();
-            pill.setCornerRadius(dp(16));
-            pill.setColor(at == 0 ? palette.accentSoft : 0);
-            item.setBackground(ripple(pill, palette));
+            TextView item;
+            if (used < stripViews.size()) {
+                item = stripViews.get(used);
+            } else {
+                item = candidateItem(palette);
+                stripViews.add(item);
+                candidateBar.addView(item);
+            }
+            styleCandidateItem(item, String.valueOf(hanzi), used == 0, palette);
             item.setOnClickListener(v -> commitPadChar(hanzi));
-            /* Wrap content, like the keyboard's candidate strip: a short list
-             * stays compact and a long one scrolls sideways. */
-            handwritingPadBoard.addView(item, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT));
+            item.setOnLongClickListener(null);
+            item.setVisibility(View.VISIBLE);
+            ++used;
         }
-        if (handwritingPadScroll != null) handwritingPadScroll.scrollTo(0, 0);
+        for (int i = used; i < stripViews.size(); ++i) {
+            stripViews.get(i).setVisibility(View.GONE);
+        }
+        if (candidateScroll != null) candidateScroll.scrollTo(0, 0);
+        updateCandidateRow();
     }
 
     /**
@@ -1995,7 +1992,14 @@ public class PimeImeService extends InputMethodService
     private void clearHandwritingPad() {
         handwritingPadMatches.clear();
         if (handwritingPad != null) handwritingPad.clear();
-        if (handwritingPadBoard != null) handwritingPadBoard.removeAllViews();
+        /* The results live in the shared candidate strip: leaving them behind
+         * would show characters for ink that no longer exists. */
+        if (candidateBar != null) {
+            candidateBar.removeAllViews();
+            stripViews.clear();
+        }
+        if (candidateScroll != null) candidateScroll.setVisibility(View.GONE);
+        updateCandidateRow();
     }
 
     @Override
@@ -3153,11 +3157,21 @@ public class PimeImeService extends InputMethodService
      */
     private void updateCandidateRow() {
         if (candidateRow == null) return;
-        /* The handwriting layout owns the whole key area: no keys, no strip,
-         * no table. The toolbar stays, because the band above the pad is
-         * otherwise empty. */
+        /* The handwriting layout owns the whole key area: no keys, no table.
+         * Its recognition results use the keyboard's candidate row, so the row
+         * and the toolbar swap in the same band exactly as they do in pinyin. */
         if (handwritingMode) {
-            candidateRow.setVisibility(View.GONE);
+            final boolean hasMatches = !handwritingPadMatches.isEmpty();
+            if (compositionView != null) {
+                compositionView.setVisibility(View.GONE);
+            }
+            if (expandButton != null) expandButton.setVisibility(View.GONE);
+            if (candidateLine != null) candidateLine.setVisibility(View.VISIBLE);
+            if (candidateScroll != null) {
+                candidateScroll.setVisibility(hasMatches
+                        ? View.VISIBLE : View.GONE);
+            }
+            candidateRow.setVisibility(hasMatches ? View.VISIBLE : View.GONE);
             if (candidatePanel != null) candidatePanel.setVisibility(View.GONE);
             if (keyboardDivider != null) keyboardDivider.setVisibility(View.GONE);
             if (keyboard != null) keyboard.setVisibility(View.GONE);
@@ -3165,7 +3179,7 @@ public class PimeImeService extends InputMethodService
                 handwritingLayoutView.setVisibility(View.VISIBLE);
             }
             if (toolbar != null) {
-                toolbar.setVisibility(toolbar.hasTools()
+                toolbar.setVisibility(toolbar.hasTools() && !hasMatches
                         ? View.VISIBLE : View.GONE);
             }
             return;
@@ -3892,7 +3906,9 @@ public class PimeImeService extends InputMethodService
         chainPage = 0;
         gridReturnPage = 0;
         gridPages.clear();
-        if (candidateBar != null) {
+        /* The pad's recognition results are not the chain's: a chain hide
+         * (reset, commit) must not wipe the ink's candidates. */
+        if (candidateBar != null && !handwritingMode) {
             candidateBar.removeAllViews();
             stripViews.clear();
         }
@@ -3920,11 +3936,13 @@ public class PimeImeService extends InputMethodService
 
     /**
      * The first visible candidate gets the accent pill; the rest are plain, so
-     * the eye lands on the one a tap on space would take.
+     * the eye lands on the one a tap on space would take. The chain's strip
+     * and the handwriting pad's both come through here, so the two rows cannot
+     * drift apart.
      */
-    private void bindCandidateItem(TextView item, CandidateEntry entry,
-                                   boolean first, KeyboardTheme palette) {
-        item.setText(entry.text);
+    private void styleCandidateItem(TextView item, String text, boolean first,
+                                    KeyboardTheme palette) {
+        item.setText(text);
         item.setTextSize(TypedValue.COMPLEX_UNIT_SP, first ? 20 : 19);
         item.setTextColor(first ? palette.accent : palette.candidateText);
         item.setTypeface(Typeface.create("sans-serif",
@@ -3933,15 +3951,20 @@ public class PimeImeService extends InputMethodService
         pill.setCornerRadius(dp(18));
         pill.setColor(first ? palette.accentSoft : 0);
         item.setBackground(ripple(pill, palette));
+        final LinearLayout.LayoutParams params =
+                (LinearLayout.LayoutParams) item.getLayoutParams();
+        params.setMargins(dp(4), dp(7), first ? dp(4) : 0, dp(7));
+        item.setLayoutParams(params);
+    }
+
+    private void bindCandidateItem(TextView item, CandidateEntry entry,
+                                   boolean first, KeyboardTheme palette) {
+        styleCandidateItem(item, entry.text, first, palette);
         item.setOnClickListener(v -> selectStripCandidate(entry));
         item.setOnLongClickListener(v -> {
             showCandidateMenu(v, entry.text);
             return true;
         });
-        final LinearLayout.LayoutParams params =
-                (LinearLayout.LayoutParams) item.getLayoutParams();
-        params.setMargins(dp(4), dp(7), first ? dp(4) : 0, dp(7));
-        item.setLayoutParams(params);
     }
 
     @Override
