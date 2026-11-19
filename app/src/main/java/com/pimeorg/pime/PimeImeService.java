@@ -22,7 +22,9 @@ import android.widget.Toast;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.InsetDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.media.AudioManager;
 import android.inputmethodservice.InputMethodService;
 import android.text.InputType;
 import android.text.Spannable;
@@ -33,8 +35,10 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.SoundEffectConstants;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
@@ -201,10 +205,36 @@ public class PimeImeService extends InputMethodService
     private boolean handwritingMode;
     private LinearLayout handwritingLayoutView;
     private HandwritingView handwritingPad;
+    /** Candidate strip on the pad's top line, beside 全屏 and the delete key. */
     private HorizontalScrollView handwritingPadScroll;
     private LinearLayout handwritingPadBoard;
     private final List<HandwritingRecognizer.Match> handwritingPadMatches =
             new ArrayList<>();
+    /** 全屏 label; tapping it lets the pad take the whole window. */
+    private TextView handwritingFullscreenButton;
+    /** Space bar of the pad's key row; the mic inside it is the voice hint. */
+    private ImageView handwritingSpaceKey;
+    /** A push-to-talk turn was opened from the pad's space bar. */
+    private boolean padVoiceLive;
+    /** The pad currently covers the screen instead of the key area. */
+    private boolean handwritingFullscreen;
+    /** The keyboard's root, and the spacer above it that grows it full screen. */
+    private LinearLayout inputRoot;
+    private View handwritingSpacer;
+    private final Runnable padVoiceHoldRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (handwritingSpaceKey == null || !onVoiceHold()) return;
+            padVoiceLive = true;
+            if (Prefs.vibrate(PimeImeService.this)) {
+                handwritingSpaceKey.performHapticFeedback(
+                        HapticFeedbackConstants.LONG_PRESS);
+            }
+            handwritingSpaceKey.setImageTintList(ColorStateList.valueOf(
+                    inputPalette != null ? inputPalette.accent
+                            : KeyboardTheme.of(PimeImeService.this).accent));
+        }
+    };
     /**
      * The layout chooser takes the keyboard's place inside the input view: a
      * board-coloured cover, a panel near the bottom and a chevron at the
@@ -266,6 +296,8 @@ public class PimeImeService extends InputMethodService
     private static final int TAB_WIDTH_DP = 250;
     private static final int RAIL_WIDTH_DP = 64;
     private static final int HANDWRITING_RESULT_HEIGHT_DP = 46;
+    /** Punctuation rail down the handwriting pad's right edge. */
+    private static final int HANDWRITING_RAIL_WIDTH_DP = 52;
 
     private int panelTab = TAB_FREQUENCY;
     private int railMode = RAIL_SYLLABLES;
@@ -349,6 +381,9 @@ public class PimeImeService extends InputMethodService
     /** Passed through the table's delete key while it takes over the keys. */
     private final KeyboardView.Key backspaceKey =
             new KeyboardView.Key("\u232b", 8, 1.5f, KeyboardView.KIND_BACKSPACE);
+    /** The handwriting key row's \u6362\u884c, with the same enter the keys send. */
+    private final KeyboardView.Key enterKey =
+            new KeyboardView.Key("\u56de\u8f66", 13, 1.8f, KeyboardView.KIND_ENTER);
     private boolean voiceReplay;
     /** True while the capture thread should keep reading the microphone. */
     private volatile boolean voiceCapturing;
@@ -706,6 +741,13 @@ public class PimeImeService extends InputMethodService
          * their place on screen when the candidate row comes and goes. */
         root.setGravity(Gravity.BOTTOM);
         root.setBackgroundColor(palette.board);
+        inputRoot = root;
+
+        /* Handwriting's 全屏 grows the window by pushing this spacer above the
+         * toolbar; at 0 it takes no room and the keyboard keeps its height. */
+        handwritingSpacer = new View(this);
+        root.addView(handwritingSpacer, 0, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0));
 
         /* Toolbar: the same evenly spread icon row WeaveText keeps above its
          * keys. It shares one band with the candidate row rather than stacking
@@ -831,6 +873,10 @@ public class PimeImeService extends InputMethodService
 
         /* First paint: hide the surface that the persisted layout does not use. */
         updateCandidateRow();
+        /* A rebuild (theme, height) must not drop the pad out of full screen. */
+        if (handwritingMode && handwritingFullscreen) {
+            root.post(this::updateHandwritingSpacer);
+        }
         return inputWindowRoot;
     }
 
@@ -1206,6 +1252,9 @@ public class PimeImeService extends InputMethodService
                 showLayoutMenu();
                 break;
             case ImeToolbar.TOOL_LANGUAGE:
+                /* Handwriting recognizes Chinese only, so asking for English
+                 * is asking for the keys back. */
+                if (handwritingMode) setHandwritingLayout(false);
                 if (keyboard != null) keyboard.toggleLanguage();
                 break;
             case ImeToolbar.TOOL_PASTE:
@@ -1568,16 +1617,23 @@ public class PimeImeService extends InputMethodService
             candidatesExpanded = false;
             panelTab = TAB_FREQUENCY;
             finishCompositionAsRaw();
+        } else if (handwritingFullscreen) {
+            /* Full screen belongs to the pad; the keys never take the screen. */
+            handwritingFullscreen = false;
+            updateHandwritingFullscreenLabel();
         }
         clearHandwritingPad();
         hideCandidates();
         updateCandidateRow();
+        updateHandwritingSpacer();
     }
 
     /**
-     * The handwriting layout: a result strip and its actions on top, the ink
-     * surface below. It replaces the keys in the same rectangle, so the editor
-     * never reflows when the layout is chosen.
+     * The handwriting layout as a mainstream IME draws it: the ink surface
+     * takes the whole key area, with 全屏, the recognition strip and the delete
+     * key on its top line, a punctuation rail down its right edge, and one row
+     * of ordinary keys at the bottom. It replaces the keys in the same
+     * rectangle, so the editor never reflows when the layout is chosen.
      */
     private LinearLayout buildHandwritingLayout(KeyboardTheme palette) {
         final LinearLayout layout = new LinearLayout(this);
@@ -1585,52 +1641,301 @@ public class PimeImeService extends InputMethodService
         layout.setBackgroundColor(palette.board);
         layout.setVisibility(View.GONE);
 
-        final LinearLayout resultRow = new LinearLayout(this);
-        resultRow.setOrientation(LinearLayout.HORIZONTAL);
-        resultRow.setGravity(Gravity.CENTER_VERTICAL);
-        resultRow.setBackgroundColor(palette.bar);
+        final FrameLayout padArea = new FrameLayout(this);
+        handwritingPad = new HandwritingView(this);
+        handwritingPad.setPalette(palette);
+        /* The pad is a keyboard page, not a demo canvas: no guide box and no
+         * hint sitting in the middle of the writing area. */
+        handwritingPad.setChromeVisible(false);
+        handwritingPad.setListener(this::onPadInkChanged);
+        padArea.addView(handwritingPad, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        /* Top line: 全屏 · candidates · ⌫, the way WeChat lays its full-screen
+         * handwriting page out. The candidates land here instead of the
+         * keyboard's candidate row, which stays folded away with the keys. */
+        final LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        handwritingFullscreenButton = new TextView(this);
+        handwritingFullscreenButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        handwritingFullscreenButton.setTextColor(palette.hint);
+        handwritingFullscreenButton.setGravity(Gravity.CENTER_VERTICAL);
+        handwritingFullscreenButton.setPadding(dp(18), 0, dp(12), 0);
+        handwritingFullscreenButton.setBackground(
+                ripple(new GradientDrawable(), palette));
+        handwritingFullscreenButton.setOnClickListener(
+                v -> setHandwritingFullscreen(!handwritingFullscreen));
+        updateHandwritingFullscreenLabel();
+        topRow.addView(handwritingFullscreenButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
         handwritingPadScroll = new HorizontalScrollView(this);
         handwritingPadScroll.setHorizontalScrollBarEnabled(false);
         handwritingPadBoard = new LinearLayout(this);
         handwritingPadBoard.setOrientation(LinearLayout.HORIZONTAL);
+        handwritingPadBoard.setGravity(Gravity.CENTER_VERTICAL);
         handwritingPadScroll.addView(handwritingPadBoard,
                 new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
-        resultRow.addView(handwritingPadScroll, new LinearLayout.LayoutParams(
+        topRow.addView(handwritingPadScroll, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
-        resultRow.addView(padAction(R.string.ime_handwriting_undo, palette,
-                v -> handwritingPad.undo()), padActionParams());
-        resultRow.addView(padAction(R.string.ime_handwriting_clear, palette,
-                v -> handwritingPad.clear()), padActionParams());
-        resultRow.addView(padAction(R.string.ime_handwriting_delete, palette,
-                v -> passThrough(backspaceKey, null)), padActionParams());
-        /* Mandatory exit: the toolbar may be empty or the layout tool removed. */
-        resultRow.addView(padAction(R.string.layout_keyboard, palette,
-                v -> setHandwritingLayout(false)), padActionParams());
-        layout.addView(resultRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(HANDWRITING_RESULT_HEIGHT_DP)));
 
-        handwritingPad = new HandwritingView(this);
-        handwritingPad.setPalette(palette);
-        handwritingPad.setListener(this::onPadInkChanged);
-        layout.addView(handwritingPad, new LinearLayout.LayoutParams(
+        final ImageButton padDelete = new ImageButton(this);
+        padDelete.setImageResource(R.drawable.ic_backspace);
+        padDelete.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        padDelete.setImageTintList(ColorStateList.valueOf(palette.keyFuncText));
+        padDelete.setPadding(dp(12), dp(12), dp(12), dp(12));
+        padDelete.setBackground(ripple(new GradientDrawable(), palette));
+        padDelete.setContentDescription(getString(R.string.ime_action_delete));
+        padDelete.setOnClickListener(v -> {
+            keyFeedback(v);
+            padDeletePressed();
+        });
+        topRow.addView(padDelete, new LinearLayout.LayoutParams(
+                dp(HANDWRITING_RESULT_HEIGHT_DP),
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        padArea.addView(topRow, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(HANDWRITING_RESULT_HEIGHT_DP), Gravity.TOP));
+
+        /* Punctuation rail: the four marks a sentence needs most, one tap
+         * each, down the right edge like the reference keyboard. */
+        final LinearLayout rail = new LinearLayout(this);
+        rail.setOrientation(LinearLayout.VERTICAL);
+        final FrameLayout.LayoutParams railParams = new FrameLayout.LayoutParams(
+                dp(HANDWRITING_RAIL_WIDTH_DP), ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.END | Gravity.TOP);
+        railParams.topMargin = dp(HANDWRITING_RESULT_HEIGHT_DP);
+        padArea.addView(rail, railParams);
+        final String[] punctuation = {"，", "。", "？", "！"};
+        for (int i = 0; i < punctuation.length; ++i) {
+            if (i > 0) {
+                final View line = new View(this);
+                line.setBackgroundColor(palette.divider);
+                final LinearLayout.LayoutParams lineParams =
+                        new LinearLayout.LayoutParams(dp(18), Math.max(1, dp(1) / 2));
+                lineParams.gravity = Gravity.CENTER_HORIZONTAL;
+                rail.addView(line, lineParams);
+            }
+            final String punctuationMark = punctuation[i];
+            final TextView mark = new TextView(this);
+            mark.setText(punctuationMark);
+            mark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+            mark.setTextColor(palette.candidateText);
+            mark.setGravity(Gravity.CENTER);
+            mark.setBackground(ripple(new GradientDrawable(), palette));
+            mark.setOnClickListener(v -> {
+                keyFeedback(v);
+                commitPadText(punctuationMark);
+            });
+            rail.addView(mark, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        }
+
+        layout.addView(padArea, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        layout.addView(buildHandwritingKeyRow(palette),
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        handwritingKeyRowHeight()));
         return layout;
     }
 
-    private TextView padAction(int label, KeyboardTheme palette,
-                               View.OnClickListener click) {
-        final TextView action = barAction(label, palette, click);
-        action.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        action.setPadding(dp(8), 0, dp(8), 0);
-        return action;
+    /**
+     * The pad's key row, in the same key language as the keyboard's bottom
+     * row: 符号/123/ABC open the matching keyboard page, the space bar types a
+     * space (hold it to talk), 键盘 goes back to the keys and 换行 sends enter.
+     */
+    private LinearLayout buildHandwritingKeyRow(KeyboardTheme palette) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(4), dp(5), dp(4), dp(7));
+
+        row.addView(padKey(R.string.ime_handwriting_symbols, palette, 1.2f,
+                false, v -> leaveHandwritingTo(true)));
+        row.addView(padKey(R.string.ime_handwriting_numbers, palette, 1.2f,
+                false, v -> leaveHandwritingTo(true)));
+        row.addView(padKey(R.string.ime_handwriting_letters, palette, 1.2f,
+                false, v -> leaveHandwritingTo(false)));
+
+        handwritingSpaceKey = new ImageView(this);
+        handwritingSpaceKey.setImageResource(R.drawable.ic_mic);
+        handwritingSpaceKey.setImageTintList(ColorStateList.valueOf(palette.hint));
+        handwritingSpaceKey.setScaleType(ImageView.ScaleType.CENTER);
+        handwritingSpaceKey.setBackground(keyFace(false, palette));
+        handwritingSpaceKey.setContentDescription(
+                getString(R.string.ime_handwriting_space));
+        handwritingSpaceKey.setOnTouchListener(this::padSpaceTouch);
+        row.addView(handwritingSpaceKey, padKeyParams(4f));
+
+        row.addView(padKey(R.string.ime_handwriting_keyboard, palette, 1.4f,
+                false, v -> leaveHandwriting()));
+        row.addView(padKey(R.string.ime_handwriting_enter, palette, 1.8f,
+                true, v -> passThrough(enterKey, null)));
+        return row;
     }
 
-    private LinearLayout.LayoutParams padActionParams() {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.MATCH_PARENT);
+    /** One text key of the pad's row, drawn like a function key of the keyboard. */
+    private TextView padKey(int label, KeyboardTheme palette, float weight,
+                            boolean accent, View.OnClickListener click) {
+        final TextView key = new TextView(this);
+        key.setText(label);
+        key.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        key.setTextColor(accent ? palette.onAccent : palette.keyFuncText);
+        key.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        key.setGravity(Gravity.CENTER);
+        key.setSingleLine(true);
+        key.setBackground(keyFace(accent, palette));
+        key.setOnClickListener(v -> {
+            keyFeedback(v);
+            click.onClick(v);
+        });
+        key.setLayoutParams(padKeyParams(weight));
+        return key;
+    }
+
+    private LinearLayout.LayoutParams padKeyParams(float weight) {
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, weight);
+        params.setMargins(dp(3), 0, dp(3), 0);
+        return params;
+    }
+
+    /** Rounded key face over its 2dp edge, the way {@link KeyboardView} draws. */
+    private Drawable keyFace(boolean accent, KeyboardTheme palette) {
+        final GradientDrawable edge = new GradientDrawable();
+        edge.setCornerRadius(dp(9));
+        edge.setColor(accent ? palette.accent : palette.keyFuncEdge);
+        final GradientDrawable face = new GradientDrawable();
+        face.setCornerRadius(dp(9));
+        face.setColor(accent ? palette.accent : palette.keyFunc);
+        final LayerDrawable layers = new LayerDrawable(
+                new Drawable[]{edge, face});
+        layers.setLayerInset(1, 0, 0, 0, accent ? 0 : Math.max(1, dp(2)));
+        return new RippleDrawable(ColorStateList.valueOf(palette.ripple),
+                layers, null);
+    }
+
+    /** The pad's bottom row is exactly one keyboard row tall. */
+    private int handwritingKeyRowHeight() {
+        final int row = (keyAreaHeight - dp((int) ROW_CHROME_DP)) / 4;
+        return Math.max(dp(40), row);
+    }
+
+    /** Leaves the pad for the keys, keeping the page the keyboard was on. */
+    private void leaveHandwriting() {
+        setHandwritingLayout(false);
+    }
+
+    /** Leaves the pad for the symbols or letters page of the keyboard. */
+    private void leaveHandwritingTo(boolean symbols) {
+        setHandwritingLayout(false);
+        if (keyboard != null) keyboard.showPage(symbols);
+    }
+
+    /**
+     * The pad's delete key. Ink comes first: the finger wants to take back
+     * what it just drew before it wants to edit committed text. With a clean
+     * pad the same key is the ordinary backspace.
+     */
+    private void padDeletePressed() {
+        if (handwritingPad != null && !handwritingPad.isEmpty()) {
+            handwritingPad.clear();
+            return;
+        }
+        passThrough(backspaceKey, null);
+    }
+
+    private void commitPadText(String text) {
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic != null) ic.commitText(text, 1);
+    }
+
+    /**
+     * Space in the pad's row: a tap types a space, a hold opens the same
+     * push-to-talk turn the keyboard's space bar does. The long-press timer is
+     * the platform one, so the gesture matches what the keys already teach.
+     */
+    private boolean padSpaceTouch(View view, MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                mainHandler.postDelayed(padVoiceHoldRunnable,
+                        ViewConfiguration.getLongPressTimeout());
+                view.setPressed(true);
+                return true;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL: {
+                final boolean cancelled =
+                        event.getActionMasked() == MotionEvent.ACTION_CANCEL;
+                mainHandler.removeCallbacks(padVoiceHoldRunnable);
+                view.setPressed(false);
+                if (padVoiceLive) {
+                    padVoiceLive = false;
+                    handwritingSpaceKey.setImageTintList(ColorStateList.valueOf(
+                            inputPalette != null ? inputPalette.hint
+                                    : KeyboardTheme.of(this).hint));
+                    onVoiceRelease(cancelled);
+                } else if (!cancelled) {
+                    commitPadText(" ");
+                }
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
+    private void setHandwritingFullscreen(boolean on) {
+        if (handwritingFullscreen == on) return;
+        handwritingFullscreen = on;
+        updateHandwritingFullscreenLabel();
+        updateHandwritingSpacer();
+    }
+
+    private void updateHandwritingFullscreenLabel() {
+        if (handwritingFullscreenButton == null) return;
+        handwritingFullscreenButton.setText(handwritingFullscreen
+                ? R.string.ime_handwriting_halfscreen
+                : R.string.ime_handwriting_fullscreen);
+    }
+
+    /**
+     * Grows or shrinks the window for 全屏 by resizing the spacer above the
+     * toolbar. The pad keeps its own layout either way; only the window's
+     * height changes, so the editor is covered rather than reflowed.
+     */
+    private void updateHandwritingSpacer() {
+        if (handwritingSpacer == null || inputRoot == null) return;
+        int height = 0;
+        if (handwritingMode && handwritingFullscreen) {
+            /* The root's height right now minus the spacer is the normal
+             * keyboard height; the rest of the screen is what 全屏 adds. */
+            final int normal = Math.max(0,
+                    inputRoot.getHeight() - handwritingSpacer.getHeight());
+            height = Math.max(0,
+                    getResources().getDisplayMetrics().heightPixels - normal);
+        }
+        final ViewGroup.LayoutParams params = handwritingSpacer.getLayoutParams();
+        if (params != null && params.height != height) {
+            params.height = height;
+            handwritingSpacer.setLayoutParams(params);
+        }
+    }
+
+    /** Haptic and sound feedback, the same the keyboard's keys give. */
+    private void keyFeedback(View view) {
+        if (Prefs.vibrate(this)) {
+            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        }
+        if (Prefs.sound(this)) {
+            final AudioManager audio =
+                    (AudioManager) getSystemService(AUDIO_SERVICE);
+            if (audio != null) audio.playSoundEffect(SoundEffectConstants.CLICK);
+        }
     }
 
     private void onPadInkChanged(List<int[][]> strokes) {
@@ -1659,13 +1964,17 @@ public class PimeImeService extends InputMethodService
                     at == 0 ? Typeface.BOLD : Typeface.NORMAL));
             item.setGravity(Gravity.CENTER);
             item.setSingleLine(true);
+            item.setPadding(dp(14), 0, dp(14), 0);
             final GradientDrawable pill = new GradientDrawable();
             pill.setCornerRadius(dp(16));
             pill.setColor(at == 0 ? palette.accentSoft : 0);
             item.setBackground(ripple(pill, palette));
             item.setOnClickListener(v -> commitPadChar(hanzi));
+            /* Wrap content, like the keyboard's candidate strip: a short list
+             * stays compact and a long one scrolls sideways. */
             handwritingPadBoard.addView(item, new LinearLayout.LayoutParams(
-                    dp(56), ViewGroup.LayoutParams.MATCH_PARENT));
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
         }
         if (handwritingPadScroll != null) handwritingPadScroll.scrollTo(0, 0);
     }

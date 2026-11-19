@@ -141,7 +141,6 @@
     <string name="layout_handwriting">手写键盘</string>
     <string name="layout_manage">键盘管理</string>
     <string name="layout_close">收起布局菜单</string>
-    <string name="layout_keyboard">键盘</string>
     <string name="layout_switched">已切换到「%1$s」</string>
     <string name="layout_unavailable">这个布局无法加载</string>
     <string name="ime_action_paste">粘贴</string>
@@ -167,7 +166,14 @@
     <string name="ime_handwriting_hint">在这里手写</string>
     <string name="ime_handwriting_undo">撤销</string>
     <string name="ime_handwriting_clear">清空</string>
-    <string name="ime_handwriting_delete">退格</string>
+    <string name="ime_handwriting_fullscreen">全屏</string>
+    <string name="ime_handwriting_halfscreen">半屏</string>
+    <string name="ime_handwriting_symbols">符号</string>
+    <string name="ime_handwriting_numbers">123</string>
+    <string name="ime_handwriting_letters">ABC</string>
+    <string name="ime_handwriting_space">空格，长按说话</string>
+    <string name="ime_handwriting_keyboard">键盘</string>
+    <string name="ime_handwriting_enter">换行</string>
     <string name="ime_candidates_empty">没有候选</string>
     <string name="voice_unavailable_secure">密码输入框不能用语音</string>
     <string name="voice_unavailable_plugin">语音插件不可用</string>

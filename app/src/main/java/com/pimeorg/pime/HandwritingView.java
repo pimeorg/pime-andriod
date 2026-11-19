@@ -39,6 +39,8 @@ final class HandwritingView extends View {
     private List<int[]> current;
     private float lastX;
     private float lastY;
+    /** Guide box and the hint in the middle; the keyboard pad keeps both off. */
+    private boolean chromeVisible = true;
 
     HandwritingView(Context context) {
         super(context);
@@ -52,6 +54,17 @@ final class HandwritingView extends View {
 
     void setListener(Listener listener) {
         this.listener = listener;
+    }
+
+    /**
+     * The guide box and the "在这里手写" hint are for the candidate panel's
+     * small tab, where the surface needs explaining. The keyboard's pad fills
+     * the key area like any other layout and stays blank until it is written
+     * on, as a mainstream IME's handwriting page does.
+     */
+    void setChromeVisible(boolean visible) {
+        this.chromeVisible = visible;
+        invalidate();
     }
 
     void setPalette(KeyboardTheme palette) {
@@ -126,7 +139,7 @@ final class HandwritingView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        if (palette != null) {
+        if (palette != null && chromeVisible) {
             guidePaint.setColor(palette.divider);
             float inset = dp(10);
             guide.set(inset, inset, getWidth() - inset, getHeight() - inset);

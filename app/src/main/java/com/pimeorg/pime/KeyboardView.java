@@ -240,6 +240,15 @@ public final class KeyboardView extends View {
         if (listener != null) listener.onLanguageChanged(english);
     }
 
+    /**
+     * Host-driven page switch: the handwriting pad's 符号/123/ABC keys leave
+     * the pad and land on the matching keyboard page, the way a mainstream
+     * IME's handwriting keys do.
+     */
+    public void showPage(boolean symbols) {
+        setPage(symbols ? PAGE_SYMBOLS : PAGE_LETTERS);
+    }
+
     private void setPage(int next) {
         if (page == next) return;
         page = next;
