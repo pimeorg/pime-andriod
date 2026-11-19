@@ -10,6 +10,7 @@ import android.content.res.AssetManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.media.AudioFormat;
@@ -1721,6 +1722,10 @@ public class PimeImeService extends InputMethodService
             mark.setTextColor(palette.candidateText);
             mark.setGravity(Gravity.CENTER);
             mark.setBackground(ripple(new GradientDrawable(), palette));
+            /* CJK punctuation sits at the left of its em box, so a centred
+             * TextView leaves the ink a few dp left of the cell; nudge it so
+             * the marks line up with the delete key in the same column. */
+            centerGlyphInk(mark);
             mark.setOnClickListener(v -> {
                 keyFeedback(v);
                 commitPadText(punctuationMark);
@@ -1736,6 +1741,35 @@ public class PimeImeService extends InputMethodService
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         handwritingKeyRowHeight()));
         return layout;
+    }
+
+    /**
+     * Optical centring for a single glyph. A centred {@link TextView} centres
+     * the advance box, not the ink, and CJK punctuation leans left inside its
+     * em box — the mark ends up visibly left of the cell. Measure the ink once
+     * the view has a width and pad the text the other way, so the visible mark
+     * sits on the cell's middle whatever font the device ships.
+     */
+    private void centerGlyphInk(TextView view) {
+        view.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                        oldLeft, oldTop, oldRight, oldBottom) -> {
+            final int width = v.getWidth();
+            if (width <= 0) return;
+            final TextView textView = (TextView) v;
+            final String text = textView.getText().toString();
+            final Paint paint = textView.getPaint();
+            final Rect ink = new Rect();
+            paint.getTextBounds(text, 0, text.length(), ink);
+            final float lineStart = (width - paint.measureText(text)) / 2f;
+            final float inkCenter = lineStart + (ink.left + ink.right) / 2f;
+            /* Centred padding shifts the text by half the padding. */
+            final float shift = width / 2f - inkCenter;
+            final int padLeft = Math.max(0, Math.round(shift * 2f));
+            final int padRight = Math.max(0, Math.round(-shift * 2f));
+            if (v.getPaddingLeft() != padLeft || v.getPaddingRight() != padRight) {
+                v.setPadding(padLeft, 0, padRight, 0);
+            }
+        });
     }
 
     /**
