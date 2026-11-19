@@ -5,6 +5,22 @@ import android.util.Log;
 /**
  * Thin JNI face of pime-core. Holds no input-method logic: it forwards host
  * events into the kernel and the kernel's sink commands back to a listener.
+ *
+ * <p>Core lives on the thread that started it: its plugins and the WASM
+ * backend are bound to that thread, and driving them from another one makes
+ * every plugin answer decode as garbage. The rest of the host does not have to
+ * care, though — the voice capture thread, the plugin wake callback and the UI
+ * all reach this object — so every call that touches core state is
+ * {@code synchronized} on it. That makes "one call at a time" hold whichever
+ * thread asks, which is also how a captured audio frame can be handed over
+ * while the main thread is still building a chain.
+ *
+ * <p>The only methods left unlocked are the ones that touch no core state:
+ * {@link #hasSession()}, {@link #isRunning()}, {@link #version()} and
+ * {@link #statusString(int)}.
+ *
+ * <p>Sink callbacks run on whatever thread made the call and never call back
+ * into core, so holding the monitor across them cannot deadlock.
  */
 public final class PimeCore {
     private static final String TAG = "PimeCore";
@@ -82,8 +98,9 @@ public final class PimeCore {
     private Listener listener;
     private String version = "";
 
-    public boolean start(String pluginDir, String dataDir, String trustDir,
-                         int flags, Listener listener) {
+    public synchronized boolean start(String pluginDir, String dataDir,
+                                      String trustDir, int flags,
+                                      Listener listener) {
         if (core != 0) return true;
         this.listener = listener;
         core = nativeStart(pluginDir, dataDir, trustDir, flags);
@@ -92,7 +109,7 @@ public final class PimeCore {
         return true;
     }
 
-    public void stop() {
+    public synchronized void stop() {
         closeSession();
         if (core != 0) {
             nativeStop(core);
@@ -110,7 +127,7 @@ public final class PimeCore {
         return version;
     }
 
-    public int loadPlugin(String packageDir) {
+    public synchronized int loadPlugin(String packageDir) {
         if (core == 0) return -1;
         return nativePluginLoad(core, packageDir);
     }
@@ -120,7 +137,7 @@ public final class PimeCore {
      * Capabilities a plugin declares but the host does not grant fail closed
      * with PIME_DENIED once the plugin uses them.
      */
-    public int permission(String capability, boolean granted) {
+    public synchronized int permission(String capability, boolean granted) {
         if (core == 0 || capability == null) return -1;
         return nativePermission(core, capability, granted);
     }
@@ -131,13 +148,13 @@ public final class PimeCore {
      *
      * @return the generation id, or 0 when it could not be built
      */
-    public long buildGeneration(byte[] config) {
+    public synchronized long buildGeneration(byte[] config) {
         if (core == 0 || config == null) return 0;
         return nativeBuildGeneration(core, config);
     }
 
     /** Activates a generation built earlier. @return 0 on success. */
-    public int activateGeneration(long generation) {
+    public synchronized int activateGeneration(long generation) {
         if (core == 0 || generation == 0) return -1;
         final int status = nativeActivateGeneration(core, generation);
         if (status != 0) {
@@ -152,7 +169,7 @@ public final class PimeCore {
      * Frees a generation that is no longer active. The core refuses to retire
      * the active generation, so callers switch first and retire afterwards.
      */
-    public int retireGeneration(long generation) {
+    public synchronized int retireGeneration(long generation) {
         if (core == 0 || generation == 0) return -1;
         return nativeRetireGeneration(core, generation);
     }
@@ -163,13 +180,13 @@ public final class PimeCore {
         return built != 0 && activateGeneration(built) == 0;
     }
 
-    public boolean openSession() {
+    public synchronized boolean openSession() {
         if (core == 0) return false;
         if (session == 0) session = nativeSessionCreate(core);
         return session != 0;
     }
 
-    public void closeSession() {
+    public synchronized void closeSession() {
         if (session != 0) {
             nativeSessionDestroy(session);
             session = 0;
@@ -181,23 +198,25 @@ public final class PimeCore {
     }
 
     /** @return 1 handled, 0 pass through to the editor, negative on error. */
-    public int key(int keycode, int modifiers, int action, String text) {
+    public synchronized int key(int keycode, int modifiers, int action,
+                                String text) {
         if (session == 0) return -1;
         return nativeKey(session, keycode, modifiers, action, text);
     }
 
-    public int text(String text) {
+    public synchronized int text(String text) {
         if (session == 0) return -1;
         return nativeText(session, text);
     }
 
-    public int selectCandidate(int index) {
+    public synchronized int selectCandidate(int index) {
         if (session == 0) return -1;
         return nativeCandidate(session, index);
     }
 
-    public int context(String appId, int fieldType, int inputType, String locale,
-                       int pageSize, int hostCaps, int maxCandidates) {
+    public synchronized int context(String appId, int fieldType, int inputType,
+                                    String locale, int pageSize, int hostCaps,
+                                    int maxCandidates) {
         if (session == 0) return -1;
         return nativeContext(session, appId, fieldType, inputType, locale,
                 pageSize, hostCaps, maxCandidates);
@@ -208,28 +227,28 @@ public final class PimeCore {
      * 0 restores the plugin's configured maximum. Does not dispatch an event,
      * so toggling the candidate table stays free of an extra chain run.
      */
-    public int setCandidateBudget(int maxCandidates) {
+    public synchronized int setCandidateBudget(int maxCandidates) {
         if (session == 0) return -1;
         return nativeCandidateBudget(session, maxCandidates);
     }
 
-    public int focus(boolean focused) {
+    public synchronized int focus(boolean focused) {
         if (session == 0) return -1;
         return nativeFocus(session, focused);
     }
 
-    public int secure(boolean secure) {
+    public synchronized int secure(boolean secure) {
         if (session == 0) return -1;
         return nativeSecure(session, secure);
     }
 
-    public int reset() {
+    public synchronized int reset() {
         if (session == 0) return -1;
         return nativeReset(session);
     }
 
     /** Tells the active chain's recognize plugins to start, stop or cancel voice input. */
-    public int voice(int action) {
+    public synchronized int voice(int action) {
         if (session == 0) return -1;
         return nativeVoice(session, action);
     }
@@ -238,7 +257,7 @@ public final class PimeCore {
      * Feeds one chunk of 16 kHz mono s16le PCM captured by the host. Safe to
      * call from the audio thread; the core writes it into its capture ring.
      */
-    public int audioIn(byte[] pcm, int length, long timeMs) {
+    public synchronized int audioIn(byte[] pcm, int length, long timeMs) {
         if (session == 0) return -1;
         return nativeAudioIn(session, pcm, length, timeMs);
     }
@@ -248,16 +267,16 @@ public final class PimeCore {
      * it over their own last-committed-word state, so the host must send it
      * whenever the editor text changes outside the chain (delete, paste).
      */
-    public int surrounding(String before, String after) {
+    public synchronized int surrounding(String before, String after) {
         if (session == 0) return -1;
         return nativeSurrounding(session, before, after);
     }
 
-    public void pump() {
+    public synchronized void pump() {
         if (core != 0) nativePump(core);
     }
 
-    public void paused(boolean paused) {
+    public synchronized void paused(boolean paused) {
         if (core != 0) nativePause(core, paused);
     }
 

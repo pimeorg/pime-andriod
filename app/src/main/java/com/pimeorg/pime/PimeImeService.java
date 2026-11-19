@@ -163,7 +163,32 @@ public class PimeImeService extends InputMethodService
     private static final float ROW_CHROME_DP = 9f + 7f + 8f * 3;
 
     private PimeCore core;
-    private boolean coreReady;
+    private volatile boolean coreReady;
+    /**
+     * Set once every plugin is installed and a chain is active. Until then the
+     * core would answer every key with "unhandled" and the raw letter would
+     * land in the editor, so keys are held in {@link #deferredKeys} instead.
+     */
+    private volatile boolean chainReady;
+    /**
+     * The cold start is walked here, a step at a time, instead of in one go.
+     * Core must stay on the main thread (its plugins and the WASM interpreter
+     * are not built to be called from another thread: from a worker every
+     * plugin answer decodes as garbage), but loading twenty packages before
+     * the first frame is what made the keyboard appear late. So the sequence
+     * is replayed across frames, one plugin per message: the keys are drawn
+     * in between, nothing else touches core meanwhile, and the thread is the
+     * same one core started on.
+     */
+    private final List<Runnable> prepareSteps = new ArrayList<>();
+    /** True while a prepare sequence owns the core (startup or a reload). */
+    private boolean preparing;
+    /** Field the chain is currently serving; reported again once it is ready. */
+    private EditorInfo activeEditor;
+    /** Keys pressed while the chain was building, replayed in order when it lands. */
+    private final List<DeferredKey> deferredKeys = new ArrayList<>();
+    /** A key cannot wait forever: past this the field is being typed into blind. */
+    private static final int DEFERRED_KEY_LIMIT = 64;
     private File pluginDir;
     private KeyboardView keyboard;
     private ImeToolbar toolbar;
@@ -308,13 +333,16 @@ public class PimeImeService extends InputMethodService
      * Two generations live side by side: the Chinese chain chosen in settings
      * and the bundled English chain. The 中/英 key only activates one or the
      * other, so no plugin is rebuilt while typing.
+     *
+     * <p>All of it is touched on the main thread only; volatile because voice
+     * capture and the sink callbacks read it from their own threads.
      */
-    private long chineseGeneration;
-    private long englishGeneration;
-    private long activeGeneration;
+    private volatile long chineseGeneration;
+    private volatile long englishGeneration;
+    private volatile long activeGeneration;
 
     /** Generation with only the native speech plugin, used while listening. */
-    private long speechGeneration;
+    private volatile long speechGeneration;
     private boolean voiceActive;
     /** Password fields never hand their text to the chain. */
     private boolean secureField;
@@ -328,41 +356,175 @@ public class PimeImeService extends InputMethodService
     private Thread voiceThread;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
+    /** The four directories core and the plugin store expect to exist. */
+    private void makeDataDirs() {
+        final File files = getFilesDir();
+        pluginDir = new File(files, "plugins");
+        pluginDir.mkdirs();
+        new File(files, "data").mkdirs();
+        new File(files, "trust").mkdirs();
+        new File(files, "chains").mkdirs();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
-        final File files = getFilesDir();
-        pluginDir = new File(files, "plugins");
-        final File dataDir = new File(files, "data");
-        final File trustDir = new File(files, "trust");
-        final File chainDir = new File(files, "chains");
-        pluginDir.mkdirs();
-        dataDir.mkdirs();
-        trustDir.mkdirs();
-        chainDir.mkdirs();
+        makeDataDirs();
+        core = new PimeCore();
+        registerRebuildReceiver();
+        /* The keys do not need the dictionaries to be drawn, and loading twenty
+         * packages before the first frame is what used to hold the keyboard
+         * back on a cold start. The sequence below is walked one step per
+         * frame instead (see pumpPrepare). */
+        startPrepare(true, true);
+    }
 
-        installBundled(pluginDir, chainDir);
-
-        try {
-            core = new PimeCore();
-            coreReady = core.start(pluginDir.getAbsolutePath(),
-                    dataDir.getAbsolutePath(), trustDir.getAbsolutePath(),
-                    PimeCore.FLAG_ALLOW_INSECURE, this);
-        } catch (Throwable error) {
-            Log.e(TAG, "native library unavailable", error);
-            coreReady = false;
+    /**
+     * Queues the startup sequence: install the bundled packages, start core,
+     * load every plugin, build both chains — then release whatever was typed.
+     *
+     * <p>Core stays on the main thread throughout. Its plugins and the WASM
+     * interpreter are not built to be driven from another thread: from a
+     * worker every plugin answer decodes as garbage ({@code PIME_CORRUPT} on
+     * every event). Slicing the work across frames gives the same latency win
+     * without moving a single core call off the thread that started it.
+     */
+    private void startPrepare(boolean coldStart, boolean reloadPlugins) {
+        if (preparing) return;
+        preparing = true;
+        chainReady = false;
+        prepareSteps.clear();
+        final File chainDir = new File(getFilesDir(), "chains");
+        prepareSteps.add(() -> chainDir.mkdirs());
+        if (coldStart) {
+            prepareSteps.add(() -> installBundled(pluginDir, chainDir));
+            prepareSteps.add(() -> coreReady = startCore(pluginDir));
+            prepareSteps.add(this::grantChainCapabilities);
         }
-        if (!coreReady) {
-            Log.w(TAG, "core not running; the keyboard passes every key through");
+        if (coldStart || reloadPlugins) {
+            /* The list has to be read after installBundled, and one step per
+             * package lets a frame slip in between them. */
+            prepareSteps.add(this::queuePluginLoads);
+        }
+        prepareSteps.add(this::buildGenerations);
+        prepareSteps.add(this::finishPrepare);
+        mainHandler.post(this::pumpPrepare);
+    }
+
+    /** Runs one prepare step and comes back for the next on the next frame. */
+    private void pumpPrepare() {
+        if (destroyed || prepareSteps.isEmpty()) {
+            preparing = false;
             return;
         }
-        Log.i(TAG, "pime-core " + core.version());
+        final Runnable step = prepareSteps.remove(0);
+        try {
+            step.run();
+        } catch (Throwable error) {
+            /* A chain that cannot be built still has to release the keys:
+             * without them the keyboard would swallow everything typed. */
+            Log.w(TAG, "prepare step failed", error);
+            prepareSteps.clear();
+        }
+        if (prepareSteps.isEmpty()) {
+            preparing = false;
+            return;
+        }
+        mainHandler.post(this::pumpPrepare);
+    }
 
-        grantChainCapabilities();
-        loadPlugins(pluginDir);
+    /**
+     * Inserts one load step per installed package right behind this one, so
+     * each package costs a frame of its own instead of one long freeze.
+     */
+    private void queuePluginLoads() {
+        if (!coreReady) {
+            prepareSteps.clear();
+            return;
+        }
+        final List<File> packages = new ArrayList<>();
+        final File[] entries = pluginDir.listFiles();
+        if (entries != null) {
+            Arrays.sort(entries);
+            for (File entry : entries) {
+                if (!entry.isDirectory()) continue;
+                if (!new File(entry, "manifest.yaml").isFile()) continue;
+                packages.add(entry);
+            }
+        }
+        for (int i = packages.size() - 1; i >= 0; --i) {
+            final File entry = packages.get(i);
+            prepareSteps.add(0, () -> loadPlugin(entry));
+        }
+        prepareSteps.add(packages.size(), () -> makeNativeEntryReadOnly(pluginDir));
+    }
 
-        buildGenerations();
-        registerRebuildReceiver();
+    /** Brings the native core up; false when it cannot run at all. */
+    private boolean startCore(File pluginDir) {
+        final File files = getFilesDir();
+        try {
+            final boolean started = core.start(pluginDir.getAbsolutePath(),
+                    new File(files, "data").getAbsolutePath(),
+                    new File(files, "trust").getAbsolutePath(),
+                    PimeCore.FLAG_ALLOW_INSECURE, this);
+            if (started) Log.i(TAG, "pime-core " + core.version());
+            else Log.w(TAG, "core not running; the keyboard passes every key through");
+            return started;
+        } catch (Throwable error) {
+            Log.e(TAG, "native library unavailable", error);
+            return false;
+        }
+    }
+
+    /**
+     * The chain is up: re-report the field that was focused while it was
+     * missing (its context and surrounding text were lost on the way), then
+     * replay what was typed. Runs once per build, so a reload re-reports too.
+     */
+    private void finishPrepare() {
+        chainReady = true;
+        Log.i(TAG, "chain ready");
+        /* The 中/英 key may have been pressed while the chain was missing; the
+         * build activated whatever the preference said back then. */
+        activateForLanguage(Prefs.english(this));
+        if (coreReady && activeEditor != null) {
+            if (!core.hasSession()) core.openSession();
+            reportContext(activeEditor);
+            refreshSurrounding();
+        }
+        flushDeferredKeys();
+    }
+
+    /**
+     * Holds a key until the chain is up. The keyboard has already given its
+     * feedback, so the press does not feel dropped; only its effect waits.
+     */
+    private void deferKey(KeyboardView.Key key, boolean shifted) {
+        if (deferredKeys.size() >= DEFERRED_KEY_LIMIT) {
+            Log.w(TAG, "chain still building; dropping key " + key.code);
+            return;
+        }
+        deferredKeys.add(new DeferredKey(key, shifted));
+    }
+
+    /** Replays what was typed during the build, in the order it was typed. */
+    private void flushDeferredKeys() {
+        if (deferredKeys.isEmpty()) return;
+        final List<DeferredKey> held = new ArrayList<>(deferredKeys);
+        deferredKeys.clear();
+        Log.i(TAG, "replaying " + held.size() + " held key(s)");
+        for (DeferredKey key : held) onKey(key.key, key.shifted);
+    }
+
+    /** A key waiting for the chain, with the shift state it was pressed with. */
+    private static final class DeferredKey {
+        final KeyboardView.Key key;
+        final boolean shifted;
+
+        DeferredKey(KeyboardView.Key key, boolean shifted) {
+            this.key = key;
+            this.shifted = shifted;
+        }
     }
 
     /**
@@ -380,7 +542,10 @@ public class PimeImeService extends InputMethodService
                 new File(ChainStore.chainsDir(this), ENGLISH_CHAIN), false);
         final long oldSpeech = speechGeneration;
         speechGeneration = buildSpeechGeneration();
-        activeGeneration = 0;
+        /* No clearing of activeGeneration here: a reload goes on serving the
+         * old generation until the new one activates, so a key pressed while
+         * the rebuild runs is never typed as raw letters. Generation ids are
+         * fresh on every build, so the switch below always happens. */
         activateForLanguage(Prefs.english(this));
 
         retireGeneration(oldChinese);
@@ -489,11 +654,10 @@ public class PimeImeService extends InputMethodService
                     return;
                 }
                 // A newly installed package has to be loaded before the chain
-                // that references it can be built.
-                if (ACTION_RELOAD_PLUGINS.equals(intent.getAction())) {
-                    loadPlugins(pluginDir);
-                }
-                buildGenerations();
+                // that references it can be built; the sliced sequence does
+                // both without ever pausing the keyboard for the whole build.
+                startPrepare(false,
+                        ACTION_RELOAD_PLUGINS.equals(intent.getAction()));
             }
         };
         final IntentFilter filter = new IntentFilter(ACTION_REBUILD_CHAIN);
@@ -508,11 +672,21 @@ public class PimeImeService extends InputMethodService
         }
     }
 
+    /** Set once the service is going down: nothing may touch the views after. */
+    private volatile boolean destroyed;
+
     @Override
     public void onDestroy() {
+        destroyed = true;
         dismissCandidateMenu();
         dismissLayoutMenu();
         cancelVoice();
+        deferredKeys.clear();
+        activeEditor = null;
+        /* Whatever is left of the startup sequence must not run against a
+         * core that is about to be stopped. */
+        prepareSteps.clear();
+        preparing = false;
         if (rebuildReceiver != null) {
             unregisterReceiver(rebuildReceiver);
             rebuildReceiver = null;
@@ -1536,7 +1710,10 @@ public class PimeImeService extends InputMethodService
      */
     @Override
     public boolean onVoiceHold() {
-        if (!coreReady) return false;
+        /* Before the chain lands there is no speech generation to activate, and
+         * the honest answer is the one core-not-running gives: the release
+         * types a plain space. */
+        if (!coreReady || !chainReady) return false;
         if (voiceActive) {
             /* A turn that outlived its release (touch cancelled without an
              * event, view rebuilt): the next hold closes it. */
@@ -1884,6 +2061,9 @@ public class PimeImeService extends InputMethodService
         super.onStartInput(attribute, restarting);
         dismissLayoutMenu();
         cancelVoice();
+        activeEditor = attribute;
+        /* Keys held for the previous field mean nothing in this one. */
+        deferredKeys.clear();
         composition = "";
         undoRuns.clear();
         secureField = isPassword(attribute.inputType);
@@ -1904,6 +2084,9 @@ public class PimeImeService extends InputMethodService
             Log.w(TAG, "session create failed");
             return;
         }
+        /* With the chain still building there is nothing to report to; the
+         * ready callback reports this very field once it exists. */
+        if (!chainReady) return;
         reportContext(attribute);
     }
 
@@ -1946,6 +2129,8 @@ public class PimeImeService extends InputMethodService
         }
         composition = "";
         undoRuns.clear();
+        activeEditor = null;
+        deferredKeys.clear();
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
         super.onFinishInput();
@@ -1953,11 +2138,25 @@ public class PimeImeService extends InputMethodService
 
     @Override
     public void onKey(KeyboardView.Key key) {
+        onKey(key, keyboard != null && keyboard.isShiftDown());
+    }
+
+    /**
+     * One key with the shift state it was pressed with, so a key held back
+     * during the chain build plays back exactly as it was typed.
+     */
+    private void onKey(KeyboardView.Key key, boolean shifted) {
+        /* Everything up to the first activated chain is still in flight: the
+         * key would come back "unhandled" and be inserted as a raw letter, so
+         * it waits instead. A core that cannot start releases them below. */
+        if (!chainReady) {
+            deferKey(key, shifted);
+            return;
+        }
         final boolean backspace = key.kind == KeyboardView.KIND_BACKSPACE;
         /* Swipe-down undo only restores what a run of deletes just removed.
          * Any other key moves the cursor context, so the journal ends here. */
         if (!backspace) undoRuns.clear();
-        final boolean shifted = keyboard != null && keyboard.isShiftDown();
         final String text = key.kind == KeyboardView.KIND_CHAR
                 || key.kind == KeyboardView.KIND_SPACE
                 ? String.valueOf(textFor(key, shifted)) : null;
@@ -3467,21 +3666,14 @@ public class PimeImeService extends InputMethodService
         }
     }
 
-    private void loadPlugins(File pluginDir) {
-        final File[] entries = pluginDir.listFiles();
-        if (entries == null) return;
-        Arrays.sort(entries);
-        for (File entry : entries) {
-            if (!entry.isDirectory()) continue;
-            if (!new File(entry, "manifest.yaml").isFile()) continue;
-            final int status = core.loadPlugin(entry.getAbsolutePath());
-            if (status == 0) {
-                Log.i(TAG, "plugin loaded: " + entry.getName());
-            } else {
-                Log.w(TAG, "plugin " + entry.getName() + ": " + text(status));
-            }
+    /** One prepare step: hands a single package to core. */
+    private void loadPlugin(File entry) {
+        final int status = core.loadPlugin(entry.getAbsolutePath());
+        if (status == 0) {
+            Log.i(TAG, "plugin loaded: " + entry.getName());
+        } else {
+            Log.w(TAG, "plugin " + entry.getName() + ": " + text(status));
         }
-        makeNativeEntryReadOnly(pluginDir);
     }
 
     /** Core's installed copy is what gets dlopen'ed; mark it non-writable. */

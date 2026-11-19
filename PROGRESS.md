@@ -1868,3 +1868,29 @@ translate 3.5 ms、rank 8.7 ms、format 6.0 ms；`woshizhongguoren` 13.1 ms/次�
   时手写格为选中态；点「全键盘拼音」键盘恢复、高亮消失；点收起箭头或面板外
   空白都会回到按键。
   `assembleDebug` 与 `testDebugUnitTest` 通过。
+
+### 冷启动不再挡键盘：启动序列按帧切片（2026-11-19）
+
+MuMu 上「点输入框后要等一会儿才出键盘」的根因是 `onCreate()` 里一次做完
+安装内置包、启动 core、加载 20 个插件包、建两条链（本机约 0.7–2.5 s 全在主
+线程），期间 `onCreateInputView()` 根本排不上。
+
+改法：把这串工作拆成 prepare 步骤队列，每次只跑一步就 `post` 回主线程
+（`startPrepare` / `pumpPrepare` / `queuePluginLoads`），插件一个一个加载：
+键盘窗口在最前面几步之后就能画出来，字典随后就绪。整个序列**始终在主线程**
+执行——实测把 core 调用搬到 worker 线程后，插件层每次事件都返回
+`PIME_CORRUPT`（WAMR 后端与线程绑定），所以没有走后台线程这条路。
+
+- **保持顺序**：`installBundled` 必须在 `core.start()` 之前（core 启动时会索引
+  已安装副本，而升级刷新会替换它们），插件加载必须在建链之前；重载广播只重读
+  插件，不再重复安装内置资源。
+- **按住按键**：链没就绪时 `core.key` 只会回 unhandled 并把原字母写进编辑框，
+  所以这段时间的按键进 `deferredKeys`（上限 64），链就绪后按原顺序重放，
+  `finishPrepare()` 还会补报当前输入框的 context / 周边文本。
+- **不再清零 `activeGeneration`**：重载期间旧链继续服务，中途按下的键不会
+  落到「无激活代」而被原样吐出。
+- **实测**（MuMu Nx 15 / Android 15 / x86_64，debug）：冷启动日志中键盘窗口
+  在 20 个插件的第 20 个之前就 `mViewVisibility=0x0`（`pime-core` 后约
+  0.9 s），`chain ready` 在约 1.6 s，全程 0 次 `PIME_CORRUPT`；冷启动期间
+  按下的键走 `replaying N held key(s)` 并在链上产生候选；主屏上常规输入
+  `candidates=63` 等候选列表正常。`assembleDebug` 与 `testDebugUnitTest` 通过。
