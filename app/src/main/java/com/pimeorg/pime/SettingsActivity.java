@@ -70,6 +70,7 @@ public final class SettingsActivity extends AppCompatActivity {
     /** Opens the launcher straight on a detail page; the IME toolbar uses it. */
     public static final String EXTRA_PAGE = "page";
     public static final String PAGE_TOOLBAR = "toolbar";
+    public static final String PAGE_KEYBOARD = "keyboard";
 
     private interface Page {
         void build(LinearLayout parent);
@@ -179,8 +180,11 @@ public final class SettingsActivity extends AppCompatActivity {
         heroSteps = findViewById(R.id.hero_steps);
 
         buildHomeRows();
-        if (PAGE_TOOLBAR.equals(getIntent().getStringExtra(EXTRA_PAGE))) {
+        final String page = getIntent().getStringExtra(EXTRA_PAGE);
+        if (PAGE_TOOLBAR.equals(page)) {
             openToolbarSettings();
+        } else if (PAGE_KEYBOARD.equals(page)) {
+            openSettings();
         }
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
@@ -201,8 +205,11 @@ public final class SettingsActivity extends AppCompatActivity {
         setIntent(intent);
         /* The launcher is usually already in its task when the keyboard asks
          * for the toolbar page, so the second visit arrives here, not onCreate. */
-        if (PAGE_TOOLBAR.equals(intent.getStringExtra(EXTRA_PAGE))) {
+        final String page = intent.getStringExtra(EXTRA_PAGE);
+        if (PAGE_TOOLBAR.equals(page)) {
             openToolbarSettings();
+        } else if (PAGE_KEYBOARD.equals(page)) {
+            openSettings();
         }
     }
 

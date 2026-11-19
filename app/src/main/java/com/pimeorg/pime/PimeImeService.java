@@ -180,8 +180,15 @@ public class PimeImeService extends InputMethodService
     private LinearLayout handwritingPadBoard;
     private final List<HandwritingRecognizer.Match> handwritingPadMatches =
             new ArrayList<>();
-    /** The layout chooser; non-focusable so it does not end the input session. */
-    private PopupWindow layoutPopup;
+    /**
+     * The layout chooser takes the keyboard's place inside the input view: a
+     * board-coloured cover, a panel near the bottom and a chevron at the
+     * top-left. It is a sibling of the keys, not a PopupWindow, so it occupies
+     * exactly the key area and leaves the editor above untouched.
+     */
+    private FrameLayout inputWindowRoot;
+    private FrameLayout layoutOverlay;
+    private FrameLayout layoutOverlayHost;
     /** Hairline between the candidate row and the key area. */
     private View keyboardDivider;
     /** Palette the current view was built with; candidates must match it. */
@@ -635,9 +642,22 @@ public class PimeImeService extends InputMethodService
         final int barBand = toolbar.hasTools()
                 ? Math.max(toolbarHeight(), dp(CANDIDATE_ROW_HEIGHT_DP)) : 0;
         root.setMinimumHeight(barBand + keyboardHeight);
+
+        /* The window wraps this frame. Normally it is exactly as tall as the
+         * keys; the layout sheet raises its minimum height to the whole screen
+         * and draws the scrim + panel over everything. */
+        inputWindowRoot = new FrameLayout(this);
+        inputWindowRoot.addView(root, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        layoutOverlay = buildLayoutOverlay(palette);
+        inputWindowRoot.addView(layoutOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
         /* First paint: hide the surface that the persisted layout does not use. */
         updateCandidateRow();
-        return root;
+        return inputWindowRoot;
     }
 
     /** Zero when the user kept no toolbar tools; the keys get the room instead. */
@@ -1050,99 +1070,248 @@ public class PimeImeService extends InputMethodService
     /* ------------------------------------------------------------- layout */
 
     /**
-     * The keyboard tool's menu: the built-in handwriting layout plus every
+     * The keyboard tool's sheet: the built-in handwriting layout plus every
      * installed chain except the reserved English one. A chain is an input
      * layout (pinyin, wubi, shuangpin, ...), so this is the layout switch.
      * 中/英 stays on its own key and toolbar tool.
+     *
+     * <p>The keys give way to a board-coloured sheet: a panel near the bottom
+     * holds a grid of icon + name cells, the current layout wears the accent
+     * pill, and a chevron at the top-left (or a tap on the cover) folds it
+     * away. The editor above keeps its place.
      */
     private void showLayoutMenu() {
-        if (toolbar == null) return;
+        if (inputWindowRoot == null || layoutOverlay == null
+                || layoutOverlayHost == null) return;
         dismissCandidateMenu();
         dismissLayoutMenu();
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
-        final LinearLayout menu = new LinearLayout(this);
-        menu.setOrientation(LinearLayout.VERTICAL);
-        final GradientDrawable fill = new GradientDrawable();
-        fill.setColor(palette.panel);
-        fill.setCornerRadius(dp(12));
-        fill.setStroke(Math.max(1, dp(1) / 2), palette.divider);
-        menu.setBackground(fill);
-        menu.setPadding(0, dp(4), 0, dp(4));
 
+        final List<View> choices = new ArrayList<>();
         final String active = ChainStore.activeChainName(this);
-        boolean first = true;
-        for (File chain : ChainStore.listChains(this)) {
-            if (chain.getName().equals(ChainStore.ENGLISH_CHAIN)) continue;
-            if (!first) menu.addView(menuDivider(palette));
-            first = false;
+        final List<File> chains = new ArrayList<>(ChainStore.listChains(this));
+        chains.removeIf(chain -> chain.getName().equals(ChainStore.ENGLISH_CHAIN));
+        chains.sort((a, b) -> Integer.compare(layoutRank(a), layoutRank(b)));
+        for (File chain : chains) {
             final File target = chain;
             final boolean checked = !handwritingMode
                     && chain.getName().equals(active);
-            menu.addView(layoutMenuRow(layoutLabel(chain), checked, palette,
-                    v -> {
+            choices.add(layoutMenuCell(layoutLabel(chain), layoutGlyph(chain),
+                    layoutIcon(chain), checked, palette, v -> {
                         dismissLayoutMenu();
                         selectLayoutChain(target);
-                    }), layoutMenuRowParams());
+                    }));
         }
-        if (!first) menu.addView(menuDivider(palette));
-        menu.addView(layoutMenuRow(getString(R.string.layout_handwriting),
+        /* Handwriting sits right after the two main keyboard layouts, the way
+         * mainstream pickers group it, and management closes the list. */
+        choices.add(Math.min(2, choices.size()), layoutMenuCell(
+                getString(R.string.layout_handwriting), "写", 0,
                 handwritingMode, palette, v -> {
                     dismissLayoutMenu();
                     setHandwritingLayout(true);
-                }), layoutMenuRowParams());
+                }));
+        choices.add(layoutMenuCell(getString(R.string.layout_manage), null,
+                R.drawable.ic_layout_manage, false, palette, v -> {
+                    dismissLayoutMenu();
+                    openKeyboardSettings();
+                }));
 
-        final PopupWindow popup = new PopupWindow(menu, dp(200),
-                ViewGroup.LayoutParams.WRAP_CONTENT, false);
-        popup.setBackgroundDrawable(new ColorDrawable(0));
-        popup.setOutsideTouchable(true);
-        popup.setElevation(dp(8));
-        popup.setOnDismissListener(() -> {
-            if (layoutPopup == popup) layoutPopup = null;
-        });
-        layoutPopup = popup;
-        final View anchor = toolbar.toolButton(ImeToolbar.TOOL_LAYOUT);
-        popup.showAsDropDown(anchor != null ? anchor : toolbar, 0, dp(4));
+        final int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        final int width = screenWidth - dp(24);
+        final LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        /* Empty panel space belongs to the sheet, not to the dismiss scrim. */
+        panel.setClickable(true);
+        final GradientDrawable fill = new GradientDrawable();
+        fill.setColor(palette.panel);
+        fill.setCornerRadius(dp(16));
+        fill.setStroke(Math.max(1, dp(1) / 2), palette.divider);
+        panel.setBackground(fill);
+        panel.setPadding(dp(6), dp(6), dp(6), dp(6));
+
+        final int columns = 4;
+        final int cellWidth = (width - dp(12)) / columns;
+        LinearLayout row = null;
+        for (int i = 0; i < choices.size(); i++) {
+            if (i % columns == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                panel.addView(row, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(88)));
+            }
+            row.addView(choices.get(i), new LinearLayout.LayoutParams(
+                    cellWidth, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+
+        panel.measure(View.MeasureSpec.makeMeasureSpec(
+                        width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        /* The sheet lives in the key area, so it may use the keyboard's own
+         * height; the chevron keeps its strip at the top. Longer chain lists
+         * scroll inside the panel. */
+        final int windowHeight = inputWindowRoot.getHeight() > 0
+                ? inputWindowRoot.getHeight()
+                : toolbarHeight() + keyboardHeight(palette);
+        final int maxHeight = Math.max(dp(120), windowHeight - dp(92));
+        final int height = Math.min(panel.getMeasuredHeight(), maxHeight);
+        final ScrollView scroller = new ScrollView(this);
+        scroller.setFillViewport(true);
+        scroller.addView(panel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        layoutOverlayHost.removeAllViews();
+        layoutOverlayHost.addView(scroller, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, height));
+        /* Pin the cover to the keyboard's current height: a MATCH_PARENT child
+         * in a wrap-content frame would otherwise measure against the screen
+         * and grow the IME window. */
+        final FrameLayout.LayoutParams overlayParams =
+                (FrameLayout.LayoutParams) layoutOverlay.getLayoutParams();
+        overlayParams.height = windowHeight;
+        layoutOverlay.setLayoutParams(overlayParams);
+        layoutOverlay.setVisibility(View.VISIBLE);
     }
 
-    private LinearLayout.LayoutParams layoutMenuRowParams() {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+    /**
+     * Key-area cover, top-left chevron and the host the layout panel is built
+     * into. Part of the input view, so the sheet takes the keyboard's place
+     * instead of opening a second window or reaching over the editor.
+     */
+    private FrameLayout buildLayoutOverlay(KeyboardTheme palette) {
+        final FrameLayout overlay = new FrameLayout(this);
+        /* Opaque board colour: the sheet replaces the keys, and the editor
+         * above keeps its place. */
+        overlay.setBackgroundColor(palette.board);
+        overlay.setClickable(true);
+        overlay.setOnClickListener(v -> dismissLayoutMenu());
+        overlay.setVisibility(View.GONE);
+
+        final ImageButton close = new ImageButton(this);
+        close.setImageResource(R.drawable.ic_chevron_up);
+        close.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        close.setPadding(dp(12), dp(12), dp(12), dp(12));
+        final GradientDrawable circle = new GradientDrawable();
+        circle.setShape(GradientDrawable.OVAL);
+        circle.setColor(palette.tabActive);
+        close.setBackground(ripple(circle, palette));
+        close.setImageTintList(ColorStateList.valueOf(palette.onBar));
+        close.setContentDescription(getString(R.string.layout_close));
+        close.setOnClickListener(v -> dismissLayoutMenu());
+        final FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(
+                dp(40), dp(40), Gravity.TOP | Gravity.START);
+        closeParams.leftMargin = dp(20);
+        closeParams.topMargin = dp(20);
+        overlay.addView(close, closeParams);
+
+        layoutOverlayHost = new FrameLayout(this);
+        /* Bottom-aligned like the reference: the chevron owns the top strip,
+         * the panel sits just above the bottom edge. */
+        final FrameLayout.LayoutParams hostParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        hostParams.leftMargin = dp(12);
+        hostParams.rightMargin = dp(12);
+        hostParams.bottomMargin = dp(28);
+        overlay.addView(layoutOverlayHost, hostParams);
+        return overlay;
     }
 
-    private View menuDivider(KeyboardTheme palette) {
-        final View line = new View(this);
-        line.setBackgroundColor(palette.divider);
-        line.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2)));
-        return line;
+    /** Familiar layouts first; unknown chains keep a stable tail. */
+    private int layoutRank(File chain) {
+        switch (ChainStore.displayName(chain)) {
+            case "t9":
+                return 0;
+            case "default":
+                return 1;
+            case "wubi":
+                return 2;
+            case "shuangpin":
+                return 3;
+            case "cangjie":
+                return 4;
+            default:
+                return 5;
+        }
     }
 
-    private View layoutMenuRow(String label, boolean checked,
-                               KeyboardTheme palette, View.OnClickListener click) {
-        final LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(20), 0, dp(14), 0);
-        row.setBackground(ripple(new GradientDrawable(), palette));
+    /** A glyph for layouts that read best as one character (五, 双, 仓). */
+    private String layoutGlyph(File chain) {
+        switch (ChainStore.displayName(chain)) {
+            case "wubi":
+                return "五";
+            case "shuangpin":
+                return "双";
+            case "cangjie":
+                return "仓";
+            default:
+                return null;
+        }
+    }
+
+    /** The picture for layouts that read best as an icon. */
+    private int layoutIcon(File chain) {
+        switch (ChainStore.displayName(chain)) {
+            case "t9":
+                return R.drawable.ic_layout_t9;
+            case "default":
+                return R.drawable.ic_layout_qwerty;
+            default:
+                return R.drawable.ic_keyboard;
+        }
+    }
+
+    /** One square of the layout grid: icon or glyph over the layout name. */
+    private View layoutMenuCell(String label, String glyph, int iconRes,
+                                boolean checked, KeyboardTheme palette,
+                                View.OnClickListener click) {
+        final LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER);
+        cell.setPadding(dp(2), dp(10), dp(2), dp(8));
+        final GradientDrawable fill = new GradientDrawable();
+        fill.setCornerRadius(dp(14));
+        fill.setColor(checked ? palette.accentSoft : 0);
+        cell.setBackground(ripple(fill, palette));
+
+        if (glyph != null) {
+            final TextView mark = new TextView(this);
+            mark.setText(glyph);
+            mark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+            mark.setTextColor(checked ? palette.accent : palette.candidateText);
+            mark.setGravity(Gravity.CENTER);
+            mark.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            cell.addView(mark, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+        } else {
+            final ImageView icon = new ImageView(this);
+            icon.setImageResource(iconRes);
+            icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+            icon.setImageTintList(ColorStateList.valueOf(
+                    checked ? palette.accent : palette.candidateText));
+            cell.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        }
+
         final TextView text = new TextView(this);
         text.setText(label);
-        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        text.setTextColor(checked ? palette.accent : palette.candidateText);
-        text.setTypeface(Typeface.create("sans-serif",
-                checked ? Typeface.BOLD : Typeface.NORMAL));
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        text.setTextColor(checked ? palette.accent : palette.hint);
+        text.setGravity(Gravity.CENTER);
         text.setSingleLine(true);
         text.setEllipsize(TextUtils.TruncateAt.END);
-        row.addView(text, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
-        if (checked) {
-            final ImageView check = new ImageView(this);
-            check.setImageResource(R.drawable.ic_check);
-            check.setImageTintList(ColorStateList.valueOf(palette.accent));
-            row.addView(check, new LinearLayout.LayoutParams(dp(20), dp(20)));
-        }
-        row.setOnClickListener(click);
-        return row;
+        text.setPadding(dp(2), dp(7), dp(2), 0);
+        cell.addView(text, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        cell.setOnClickListener(click);
+        return cell;
+    }
+
+    private void openKeyboardSettings() {
+        requestHideSelf(0);
+        openSettings(SettingsActivity.PAGE_KEYBOARD);
     }
 
     private String layoutLabel(File chain) {
@@ -1164,10 +1333,10 @@ public class PimeImeService extends InputMethodService
     }
 
     private void dismissLayoutMenu() {
-        if (layoutPopup == null) return;
-        final PopupWindow popup = layoutPopup;
-        layoutPopup = null;
-        popup.dismiss();
+        if (layoutOverlay == null
+                || layoutOverlay.getVisibility() != View.VISIBLE) return;
+        layoutOverlay.setVisibility(View.GONE);
+        if (layoutOverlayHost != null) layoutOverlayHost.removeAllViews();
     }
 
     /**
