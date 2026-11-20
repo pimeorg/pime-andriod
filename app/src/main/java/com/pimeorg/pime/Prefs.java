@@ -34,10 +34,10 @@ public final class Prefs {
     public static final int[] CANDIDATE_COUNTS = {0, 3, 5, 7, 9};
 
     /**
-     * Milliseconds the ink stays after a stroke before it fades away; 0 keeps
-     * it on the pad until the user clears or commits it.
+     * How long after a stroke lands that stroke starts to dim; 0 keeps every
+     * stroke at full strength until the user clears or commits.
      */
-    public static final int[] HANDWRITING_FADE_DELAYS = {0, 1500, 2500, 4000};
+    public static final int[] HANDWRITING_FADE_DELAYS = {0, 100, 500, 800, 1200};
 
     private static final String FILE = "pime";
 
@@ -76,7 +76,7 @@ public final class Prefs {
     }
 
     public static int handwritingFadeDelay(Context context) {
-        return prefs(context).getInt("handwriting_fade_delay", 2500);
+        return prefs(context).getInt("handwriting_fade_delay", 100);
     }
 
     public static void setHandwritingFadeDelay(Context context, int value) {

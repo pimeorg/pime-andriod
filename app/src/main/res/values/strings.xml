@@ -95,11 +95,12 @@
     <string name="row_theme">主题</string>
     <string name="row_theme_desc">跟随系统，或固定浅色 / 深色</string>
     <string name="row_handwriting_fade">手写墨迹淡出</string>
-    <string name="row_handwriting_fade_desc">每一笔写完保留多久，随后按先后逐笔变淡，淡到一定程度停住；候选仍可点选</string>
+    <string name="row_handwriting_fade_desc">落笔稍停后按笔顺逐笔变淡，淡到 30% 停住；候选仍可点选</string>
     <string name="handwriting_fade_off">关闭</string>
-    <string name="handwriting_fade_1_5">1.5 秒</string>
-    <string name="handwriting_fade_2_5">2.5 秒</string>
-    <string name="handwriting_fade_4">4 秒</string>
+    <string name="handwriting_fade_0_1">0.1 秒</string>
+    <string name="handwriting_fade_0_5">0.5 秒</string>
+    <string name="handwriting_fade_0_8">0.8 秒</string>
+    <string name="handwriting_fade_1_2">1.2 秒</string>
     <string name="height_compact">紧凑</string>
     <string name="height_standard">标准</string>
     <string name="height_roomy">宽松</string>

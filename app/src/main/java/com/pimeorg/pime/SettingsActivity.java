@@ -1696,12 +1696,14 @@ public final class SettingsActivity extends AppCompatActivity {
         switch (delayMs) {
             case 0:
                 return getString(R.string.handwriting_fade_off);
-            case 1500:
-                return getString(R.string.handwriting_fade_1_5);
-            case 4000:
-                return getString(R.string.handwriting_fade_4);
+            case 100:
+                return getString(R.string.handwriting_fade_0_1);
+            case 500:
+                return getString(R.string.handwriting_fade_0_5);
+            case 1200:
+                return getString(R.string.handwriting_fade_1_2);
             default:
-                return getString(R.string.handwriting_fade_2_5);
+                return getString(R.string.handwriting_fade_0_8);
         }
     }
 

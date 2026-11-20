@@ -12,6 +12,7 @@ import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
 
 import java.util.ArrayList;
@@ -24,20 +25,30 @@ import java.util.List;
  * the finished ink to the listener after every lift so the table can show
  * fresh candidates. Points are reported in a 0..255 square, which is the
  * coordinate space the stroke templates were built in.
+ *
+ * <p>Every stroke dims a moment after it was written, strictly in the order it
+ * was drawn — one stroke finishes dimming before the next begins — and stops
+ * at {@link #FADED_ALPHA} instead of vanishing: the finished parts of a
+ * character sit lighter behind the strokes still being written, and the whole
+ * character stays on the pad for recognition.
  */
 final class HandwritingView extends View {
 
-    /** How long one stroke takes to thin out once its hold is over. */
-    private static final long FADE_DURATION_MS = 500;
-    /** Old ink stops here instead of vanishing, so the whole character stays. */
-    private static final float MIN_INK_ALPHA = 0.35f;
+    /** Where a stroke's ink stops once its turn to dim has come. */
+    private static final float FADED_ALPHA = 0.3f;
+    /** One stroke's dimming; slow enough that the eye follows it down. */
+    private static final long DIM_MS = 1500;
+    /** The dissolve after a commit, which should feel immediate. */
+    private static final long DISSOLVE_MS = 300;
 
-    /** One finger stroke and when it was lifted, so it can fade on its own. */
+    /** One finger stroke; it remembers when its turn to dim comes and starts. */
     private static final class Stroke {
         final List<int[]> points = new ArrayList<>();
         final Path path = new Path();
-        /** Uptime of the lift; 0 while the finger is still down. */
-        long endedAt;
+        /** Earliest uptime dimming may begin; -1 while the finger is still down. */
+        long fadeAt = -1;
+        /** Uptime dimming actually began; -1 until it is this stroke's turn. */
+        long fadeStart = -1;
     }
 
     interface Listener {
@@ -62,20 +73,19 @@ final class HandwritingView extends View {
     private float inkAlpha = 1f;
     private ValueAnimator fadeAnimator;
     private boolean fadeLoopRunning;
+    private final AccelerateDecelerateInterpolator dimCurve =
+            new AccelerateDecelerateInterpolator();
 
     /**
-     * Each stroke thins out on its own once its hold is over, so a character
-     * written slowly dims stroke by stroke rather than all at once, and stops
-     * at {@link #MIN_INK_ALPHA} instead of vanishing: the whole character
-     * stays on the pad. Frames keep coming only while some stroke still moves.
+     * Frames keep coming only while some stroke is still waiting or on its way
+     * down to {@link #FADED_ALPHA}; once every stroke sits there the loop stops.
      */
     private final Runnable fadeFrame = new Runnable() {
         @Override
         public void run() {
+            pumpFade(SystemClock.uptimeMillis());
             invalidate();
-            if (isAttachedToWindow()
-                    && stillFading(SystemClock.uptimeMillis(),
-                            Prefs.handwritingFadeDelay(getContext()))) {
+            if (isAttachedToWindow() && stillFading(SystemClock.uptimeMillis())) {
                 postOnAnimation(this);
             } else {
                 fadeLoopRunning = false;
@@ -150,7 +160,58 @@ final class HandwritingView extends View {
         });
     }
 
-    /** Drops a pending or running whole-ink dissolve and restores full strength. */
+    /** Marks when this stroke may start dimming: a short beat after it landed. */
+    private void scheduleFade(Stroke stroke) {
+        final int delay = Prefs.handwritingFadeDelay(getContext());
+        if (delay <= 0) return;
+        stroke.fadeAt = SystemClock.uptimeMillis() + delay;
+    }
+
+    private void startFadeLoop() {
+        if (fadeLoopRunning) return;
+        if (Prefs.handwritingFadeDelay(getContext()) <= 0) return;
+        fadeLoopRunning = true;
+        postOnAnimation(fadeFrame);
+    }
+
+    /**
+     * Hands each stroke its turn in drawing order: a stroke may begin dimming
+     * only once it is due and the stroke before it has finished dimming, so
+     * the ink always lightens first stroke to last, never several at once.
+     */
+    private void pumpFade(long now) {
+        long previousEnd = 0;
+        for (Stroke stroke : strokes) {
+            if (stroke == current) break;
+            if (stroke.fadeAt < 0) continue;
+            final long start = stroke.fadeStart >= 0
+                    ? stroke.fadeStart
+                    : Math.max(stroke.fadeAt, previousEnd);
+            if (stroke.fadeStart < 0 && now >= start) stroke.fadeStart = start;
+            previousEnd = start + DIM_MS;
+        }
+    }
+
+    private boolean stillFading(long now) {
+        for (Stroke stroke : strokes) {
+            if (stroke == current || stroke.fadeAt < 0) continue;
+            if (stroke.fadeStart < 0 || now < stroke.fadeStart + DIM_MS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private float strokeAlpha(Stroke stroke, long now) {
+        if (stroke == current || stroke.fadeStart < 0) return 1f;
+        final long age = now - stroke.fadeStart;
+        if (age <= 0) return 1f;
+        if (age >= DIM_MS) return FADED_ALPHA;
+        final float t = dimCurve.getInterpolation((float) age / DIM_MS);
+        return 1f - (1f - FADED_ALPHA) * t;
+    }
+
+    /** Drops the whole-ink dissolve and restores full strength. */
     private void cancelFade() {
         if (fadeAnimator != null) {
             final ValueAnimator animator = fadeAnimator;
@@ -169,7 +230,7 @@ final class HandwritingView extends View {
         if (previous != null) previous.cancel();
         final ValueAnimator animator = ValueAnimator.ofFloat(inkAlpha, target);
         fadeAnimator = animator;
-        animator.setDuration(FADE_DURATION_MS);
+        animator.setDuration(DISSOLVE_MS);
         animator.setInterpolator(new LinearInterpolator());
         animator.addUpdateListener(a -> {
             inkAlpha = (float) a.getAnimatedValue();
@@ -184,36 +245,6 @@ final class HandwritingView extends View {
             }
         });
         animator.start();
-    }
-
-    /**
-     * True while some stroke still has to move (hold running or thinning out);
-     * the frame loop stops once every stroke sits at its floor.
-     */
-    private boolean stillFading(long now, int hold) {
-        if (hold <= 0) return false;
-        for (Stroke stroke : strokes) {
-            if (stroke != current && now - stroke.endedAt - hold < FADE_DURATION_MS) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void startFadeLoop() {
-        if (fadeLoopRunning) return;
-        if (Prefs.handwritingFadeDelay(getContext()) <= 0) return;
-        fadeLoopRunning = true;
-        postOnAnimation(fadeFrame);
-    }
-
-    private float strokeAlpha(Stroke stroke, long now, int hold) {
-        if (stroke == current || hold <= 0) return 1f;
-        final long age = now - stroke.endedAt - hold;
-        if (age <= 0) return 1f;
-        if (age >= FADE_DURATION_MS) return MIN_INK_ALPHA;
-        final float t = (float) age / FADE_DURATION_MS;
-        return 1f - (1f - MIN_INK_ALPHA) * t;
     }
 
     boolean isEmpty() {
@@ -273,9 +304,8 @@ final class HandwritingView extends View {
             }
         }
         final long now = SystemClock.uptimeMillis();
-        final int hold = Prefs.handwritingFadeDelay(getContext());
         for (Stroke stroke : strokes) {
-            final float alpha = strokeAlpha(stroke, now, hold) * inkAlpha;
+            final float alpha = strokeAlpha(stroke, now) * inkAlpha;
             if (alpha <= 0f) continue;
             inkPaint.setAlpha(Math.round(255 * alpha));
             canvas.drawPath(stroke.path, inkPaint);
@@ -293,8 +323,6 @@ final class HandwritingView extends View {
     public boolean onTouchEvent(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
-                /* Writing again keeps the ink that is already there, even if
-                 * it had started to fade. */
                 cancelFade();
                 current = new Stroke();
                 strokes.add(current);
@@ -323,8 +351,8 @@ final class HandwritingView extends View {
                 if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                     current.points.add(new int[]{Math.round(event.getX()), Math.round(event.getY())});
                 }
-                current.endedAt = SystemClock.uptimeMillis();
                 rebuildPath(current);
+                scheduleFade(current);
                 current = null;
                 invalidate();
                 emit();
