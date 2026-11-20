@@ -2024,3 +2024,32 @@ XIME 的停顿节奏与 30% 阈值。
   修复后通过。`testDebugUnitTest`（5 个用例）与 `assembleDebug` 通过。
 - **未做端到端实测**：MuMu 12 仍处于多显示任务模式，adb 触摸注入与 IME 窗口
   显示在任务显示上不可用；本轮以模拟矩阵和单测为准。
+
+## 长按空格语音「完全不识别」——宿主回复没拆信封（2026-11-20）
+
+用户反馈长按空格后 `listening` 正常、松手却是 `stopped, 0 chars`，说什么都不认。
+
+- **现象**：手机/模拟器上长按空格，logcat 只有 `recognizer ready` →
+  `listening` → `voice: capture running` → `stopped, 0 chars`；插件从未打印
+  `audio frames=… rms=…`，只在松手时打三次 `capture read: 5`（`PIME_TIMEOUT`）。
+- **根因**：`pime-speech-sherpa` 的 `capture_read` 把 host 回复直接当成结果
+  map 去取 `data`，但 pime-core 的 host 回复一律是
+  `{ status, result }` 信封（`host_bridge.cpp` 的 `reply()`；
+  `pimeplug/host.hpp` 的 `envelope_ok` 就是给插件拆信封用的）。实际收到的
+  字节是 `a2 66 "status" 00 66 "result" a5 …`，顶层根本没有 `data`，于是每次
+  读取都在 `span_bytes` 处静默返回 false，音频永远送不进识别器。`wav_file`
+  回放不走 `audio.capture`，所以此前唯一验证过的路径恰好绕过了这个 bug。
+- **修复（插件）**：`capture_read` 先校验信封 `status`，再从 `result` 里取
+  `data`，与其他插件（handwriting/speech-ncnn）的写法一致。
+- **顺带修**：同函数里的调试电平统计把 `int16_t` 先转成 `uint64_t` 再乘绝对值，
+  负数样本会溢出，安静时打出的 `rms=33954697` 毫无意义；改为按 `int32_t`
+  绝对值计算，现在静音就是 `rms=0`。
+- **验证**：修复后同一轮长按出现 `audio frames=10/20 rms=0`，说明 PCM 真正进了
+  识别器；MuMu 的宿主麦克风电平在 audio_flinger 里是 -100 dB（未接麦克风），
+  所以现场仍是 0 字，这是环境而非代码。把 16 kHz 的「你好，今天天气不错…」
+  放到 `files/voice-test.wav` 回放，预编辑字数 45～54 随按压时长变化，松手后
+  文本「你好今天天气不错我们一起去公园散步吧」确实提交进设置页试验输入框。
+- **环境备注**：MuMu 12 处于多显示任务模式时，应用被放到单独的 organized
+  display，IME 窗口固定在 display 0，`input -d 0` 够不到键盘。用
+  `am display move-stack <taskId> 0` 把任务页搬回 display 0 后即可正常做
+  端到端实测（本轮即用此法）。
