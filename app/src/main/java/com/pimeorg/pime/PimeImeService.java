@@ -1623,7 +1623,7 @@ public class PimeImeService extends InputMethodService
             handwritingFullscreen = false;
             updateHandwritingFullscreenLabel();
         }
-        clearHandwritingPad();
+        clearHandwritingPad(false);
         hideCandidates();
         updateCandidateRow();
         updateHandwritingSpacer();
@@ -2020,12 +2020,20 @@ public class PimeImeService extends InputMethodService
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         ic.commitText(String.valueOf(hanzi), 1);
-        clearHandwritingPad();
+        clearHandwritingPad(true);
     }
 
-    private void clearHandwritingPad() {
+    /**
+     * @param fade the ink was just committed: dissolve it instead of cutting
+     *             it, so the pad reads as clearing itself. Layout switches and
+     *             input restarts cut immediately.
+     */
+    private void clearHandwritingPad(boolean fade) {
         handwritingPadMatches.clear();
-        if (handwritingPad != null) handwritingPad.clear();
+        if (handwritingPad != null) {
+            if (fade) handwritingPad.fadeOut();
+            else handwritingPad.clear();
+        }
         /* The results live in the shared candidate strip: leaving them behind
          * would show characters for ink that no longer exists. */
         if (candidateBar != null) {
@@ -2424,7 +2432,7 @@ public class PimeImeService extends InputMethodService
         railStroke = -1;
         handwritingMatches.clear();
         if (handwritingView != null) handwritingView.clear();
-        clearHandwritingPad();
+        clearHandwritingPad(false);
         if (!coreReady) return;
 
         if (!core.hasSession() && !core.openSession()) {
@@ -2468,7 +2476,7 @@ public class PimeImeService extends InputMethodService
     public void onFinishInput() {
         dismissLayoutMenu();
         cancelVoice();
-        clearHandwritingPad();
+        clearHandwritingPad(false);
         if (coreReady) {
             report(core.focus(false), "focus");
             report(core.reset(), "reset");
@@ -3894,7 +3902,10 @@ public class PimeImeService extends InputMethodService
         }
         ic.commitText(String.valueOf(hanzi), 1);
         candidates.clear();
-        if (handwritingView != null) handwritingView.clear();
+        /* The ink dissolves; its results go at once, so the grid is already
+         * empty when it is rendered below. */
+        handwritingMatches.clear();
+        if (handwritingView != null) handwritingView.fadeOut();
         if (stayOpen) {
             /* The chain's reset may have folded the panel; the handwriting
              * surface stays up for the next character. */

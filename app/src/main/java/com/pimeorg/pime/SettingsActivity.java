@@ -1324,6 +1324,11 @@ public final class SettingsActivity extends AppCompatActivity {
                     themeLabel(Prefs.theme(this)), R.drawable.ic_chevron_right,
                     v -> chooseTheme());
             addDivider(display);
+            addRow(display, R.drawable.ic_fade,
+                    getString(R.string.row_handwriting_fade),
+                    handwritingFadeLabel(Prefs.handwritingFadeDelay(this)),
+                    R.drawable.ic_chevron_right, v -> chooseHandwritingFade());
+            addDivider(display);
             addRow(display, R.drawable.ic_tune, getString(R.string.row_toolbar),
                     getString(R.string.row_toolbar_desc,
                             Prefs.toolbarTools(this).size()),
@@ -1685,6 +1690,34 @@ public final class SettingsActivity extends AppCompatActivity {
             // night mode, so there is nothing left to rebuild here.
             AppCompatDelegate.setDefaultNightMode(Prefs.nightMode(this));
         });
+    }
+
+    private CharSequence handwritingFadeLabel(int delayMs) {
+        switch (delayMs) {
+            case 0:
+                return getString(R.string.handwriting_fade_off);
+            case 1500:
+                return getString(R.string.handwriting_fade_1_5);
+            case 4000:
+                return getString(R.string.handwriting_fade_4);
+            default:
+                return getString(R.string.handwriting_fade_2_5);
+        }
+    }
+
+    private void chooseHandwritingFade() {
+        final int[] values = Prefs.HANDWRITING_FADE_DELAYS;
+        final CharSequence[] labels = new CharSequence[values.length];
+        for (int i = 0; i < values.length; i++) {
+            labels[i] = handwritingFadeLabel(values[i]);
+        }
+        choose(R.string.row_handwriting_fade, labels,
+                indexOf(values, Prefs.handwritingFadeDelay(this)),
+                (dialog, which) -> {
+                    Prefs.setHandwritingFadeDelay(this, values[which]);
+                    dialog.dismiss();
+                    rebuildDetail();
+                });
     }
 
     private void choose(int titleRes, CharSequence[] labels, int selected,

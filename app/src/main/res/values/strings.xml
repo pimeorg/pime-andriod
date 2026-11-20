@@ -94,6 +94,12 @@
     <string name="separator_space">空格</string>
     <string name="row_theme">主题</string>
     <string name="row_theme_desc">跟随系统，或固定浅色 / 深色</string>
+    <string name="row_handwriting_fade">手写墨迹淡出</string>
+    <string name="row_handwriting_fade_desc">每一笔写完保留多久，随后按先后逐笔变淡，淡到一定程度停住；候选仍可点选</string>
+    <string name="handwriting_fade_off">关闭</string>
+    <string name="handwriting_fade_1_5">1.5 秒</string>
+    <string name="handwriting_fade_2_5">2.5 秒</string>
+    <string name="handwriting_fade_4">4 秒</string>
     <string name="height_compact">紧凑</string>
     <string name="height_standard">标准</string>
     <string name="height_roomy">宽松</string>
@@ -128,7 +134,7 @@
     <string name="tool_settings_desc">打开工具栏定制页，调整显示与顺序</string>
     <string name="tool_hide">收起键盘</string>
     <string name="tool_hide_desc">把输入法键盘收起来</string>
-    <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏、拼音分隔、主题与工具栏）；分词、词典与候选排序由插件链决定。长按候选可固定首位或删除该词，记录在本机。</string>
+    <string name="settings_note">这里只影响本机的外壳显示（键盘尺寸、手感、候选栏、拼音分隔、主题、手写淡出与工具栏）；分词、词典与候选排序由插件链决定。长按候选可固定首位或删除该词，记录在本机。</string>
 
     <string name="ime_action_settings">键盘设置</string>
     <string name="ime_action_hide">收起键盘</string>

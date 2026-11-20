@@ -33,6 +33,12 @@ public final class Prefs {
     /** 0 means "show every candidate the chain returns". */
     public static final int[] CANDIDATE_COUNTS = {0, 3, 5, 7, 9};
 
+    /**
+     * Milliseconds the ink stays after a stroke before it fades away; 0 keeps
+     * it on the pad until the user clears or commits it.
+     */
+    public static final int[] HANDWRITING_FADE_DELAYS = {0, 1500, 2500, 4000};
+
     private static final String FILE = "pime";
 
     private Prefs() {
@@ -67,6 +73,14 @@ public final class Prefs {
 
     public static void setCandidates(Context context, int value) {
         prefs(context).edit().putInt("candidates", value).apply();
+    }
+
+    public static int handwritingFadeDelay(Context context) {
+        return prefs(context).getInt("handwriting_fade_delay", 2500);
+    }
+
+    public static void setHandwritingFadeDelay(Context context, int value) {
+        prefs(context).edit().putInt("handwriting_fade_delay", value).apply();
     }
 
     /** Display-only separator; the editor's composing text stays as typed. */
