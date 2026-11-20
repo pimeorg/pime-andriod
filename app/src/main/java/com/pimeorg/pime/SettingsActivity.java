@@ -166,6 +166,11 @@ public final class SettingsActivity extends AppCompatActivity {
 
         toolbar = findViewById(R.id.toolbar);
         toolbar.inflateMenu(R.menu.menu_home);
+        /* Detail pages show a back arrow, and the icon is a fixed-colour
+         * vector: tint it with the surface text colour or it would stay black
+         * in dark mode instead of inverting with the toolbar. */
+        toolbar.setNavigationIconTint(
+                attrColor(com.google.android.material.R.attr.colorOnSurface));
         toolbar.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == R.id.action_about) {
                 openAbout();
