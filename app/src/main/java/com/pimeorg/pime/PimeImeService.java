@@ -362,6 +362,8 @@ public class PimeImeService extends InputMethodService
     private ClipboardHistory clipboardHistory;
     /** True while the key-area overlay (layout chooser or clipboard sheet) is up. */
     private boolean clipboardOpen;
+    /** Which tab the clipboard sheet was last on; kept across sheet rebuilds. */
+    private int clipboardPanelTab;
 
     /**
      * Two generations live side by side: the Chinese chain chosen in settings
@@ -2311,33 +2313,6 @@ public class PimeImeService extends InputMethodService
         }
     }
 
-    /**
-     * Inserts the clipboard's text as plain editor text. Pasting is a host
-     * action: the chain has no say in it, and a live composition is finished
-     * first because commitText replaces the composing region.
-     */
-    private void pasteClipboard() {
-        final android.content.ClipboardManager manager =
-                (android.content.ClipboardManager)
-                        getSystemService(Context.CLIPBOARD_SERVICE);
-        final android.content.ClipData clip =
-                manager == null ? null : manager.getPrimaryClip();
-        CharSequence text = null;
-        if (clip != null && clip.getItemCount() > 0) {
-            text = clip.getItemAt(0).coerceToText(this);
-        }
-        if (text == null || text.length() == 0) {
-            android.widget.Toast.makeText(this, R.string.ime_paste_empty,
-                    android.widget.Toast.LENGTH_SHORT).show();
-            return;
-        }
-        final InputConnection ic = getCurrentInputConnection();
-        if (ic == null) return;
-        resetCompositionForCommit(ic);
-        ic.commitText(text, 1);
-        refreshSurrounding();
-    }
-
     // ------------------------------------------------------- clipboard sheet
 
     /**
@@ -2353,7 +2328,8 @@ public class PimeImeService extends InputMethodService
                 ? inputPalette : KeyboardTheme.of(this);
         final ClipboardPanel panel = new ClipboardPanel(this, palette,
                 clipboardPanelListener(),
-                clipboardHistory.quickSendItems(), clipboardHistory.history());
+                clipboardHistory.quickSendItems(), clipboardHistory.history(),
+                clipboardPanelTab);
         final int windowHeight = inputWindowRoot.getHeight() > 0
                 ? inputWindowRoot.getHeight()
                 : toolbarHeight() + keyboardHeight(palette);
@@ -2374,10 +2350,6 @@ public class PimeImeService extends InputMethodService
                 dismissLayoutMenu();
                 insertClipboardEntry(entry);
             }
-            @Override public void onPasteCurrent() {
-                dismissLayoutMenu();
-                pasteClipboard();
-            }
             @Override public void onClearHistory() {
                 clipboardHistory.clearHistory();
             }
@@ -2390,8 +2362,19 @@ public class PimeImeService extends InputMethodService
             @Override public void onRemoveFromQuickSend(ClipboardEntry entry) {
                 clipboardHistory.removeFromQuickSend(entry.id);
             }
+            @Override public void onPinQuickSend(ClipboardEntry entry) {
+                clipboardHistory.pinQuickSend(entry.id);
+            }
             @Override public void onDelete(ClipboardEntry entry) {
                 clipboardHistory.remove(entry.id);
+            }
+            @Override public void onTabChanged(int tab) {
+                clipboardPanelTab = tab;
+            }
+            @Override public void onDeleteEntries(List<ClipboardEntry> entries) {
+                final List<Long> ids = new ArrayList<>(entries.size());
+                for (ClipboardEntry entry : entries) ids.add(entry.id);
+                clipboardHistory.remove(ids);
             }
         };
     }

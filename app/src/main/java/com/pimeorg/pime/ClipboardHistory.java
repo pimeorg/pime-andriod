@@ -1,10 +1,14 @@
 package com.pimeorg.pime;
 
+import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PersistableBundle;
 
 import androidx.core.content.FileProvider;
 
@@ -12,6 +16,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.security.MessageDigest;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -101,35 +106,157 @@ final class ClipboardHistory {
     // ------------------------------------------------------------ system clipboard
 
     private void onSystemClipboardChanged() {
+        captureClip(3);
+    }
+
+    /**
+     * Captures the primary clip. Some apps publish the clip asynchronously, so
+     * the change callback can fire before the data is readable; a null clip is
+     * retried a few times before giving up.
+     */
+    private void captureClip(int retries) {
         if (systemClipboard == null) return;
-        final android.content.ClipData clip = systemClipboard.getPrimaryClip();
-        if (clip == null || clip.getItemCount() == 0) return;
-        final android.content.ClipData.Item item = clip.getItemAt(0);
+        final ClipData clip = systemClipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            if (retries > 0) main.postDelayed(() -> captureClip(retries - 1), 100);
+            return;
+        }
+        /* API 33+ lets the producer mark password-manager output as sensitive;
+         * history keeps those out unless the user opts in. */
+        if (isSensitiveClip(clip) && !Prefs.clipboardCaptureSensitive(context)) return;
+        final ClipData.Item item = clip.getItemAt(0);
         final Uri uri = item.getUri();
         if (uri != null) {
-            final String mime = context.getContentResolver().getType(uri);
-            if (mime != null && mime.startsWith("image/")) {
-                executor.execute(() -> addMediaFromUri(uri, mime, MAX_IMAGE_BYTES));
+            final String mime = mimeOf(uri);
+            if (mime == null) {
+                /* Undeclared type (some apps omit it): sniff the first bytes,
+                 * off the main thread. Media is stored as media; anything else
+                 * falls back to the item's text — never the content:// string,
+                 * which could not be pasted as text. */
+                final CharSequence text = item.getText();
+                executor.execute(() -> {
+                    final String sniffed = sniffMediaMime(uri);
+                    if (sniffed != null) {
+                        addMediaFromUri(uri, sniffed, sniffed.startsWith("video/")
+                                ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES);
+                    } else if (text != null && text.length() > 0) {
+                        addText(text.toString());
+                    }
+                });
                 return;
             }
-            if (mime != null && mime.startsWith("video/")) {
-                executor.execute(() -> addMediaFromUri(uri, mime, MAX_VIDEO_BYTES));
+            if (mime.startsWith("image/") || mime.startsWith("video/")) {
+                final long cap = mime.startsWith("video/") ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+                executor.execute(() -> addMediaFromUri(uri, mime, cap));
                 return;
             }
         }
         final CharSequence text = item.getText() != null
                 ? item.getText()
-                : uri != null
-                ? uri.toString()
-                : item.getIntent() != null ? item.getIntent().toUri(0) : null;
-        if (text == null) return;
+                : uri == null && item.getIntent() != null ? item.getIntent().toUri(0) : null;
+        if (text == null || text.length() == 0) return;
         final String value = text.toString();
-        if (value.isEmpty()) return;
-        executor.execute(() -> {
-            store.upsertText(value, System.currentTimeMillis(), countLimit());
-            trimToPolicy();
-            refresh();
-        });
+        executor.execute(() -> addText(value));
+    }
+
+    private void addText(String value) {
+        store.upsertText(value, System.currentTimeMillis(), countLimit());
+        trimToPolicy();
+        refresh();
+    }
+
+    private static boolean isSensitiveClip(ClipData clip) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
+        final PersistableBundle extras = clip.getDescription().getExtras();
+        return extras != null && extras.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false);
+    }
+
+    private String mimeOf(Uri uri) {
+        try {
+            return context.getContentResolver().getType(uri);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * MIME from the first 16 bytes, for clips whose producer declared no type.
+     * Only image and video signatures are recognised; anything else is null.
+     */
+    private String sniffMediaMime(Uri uri) {
+        final byte[] head = new byte[16];
+        int count = 0;
+        try (InputStream input = context.getContentResolver().openInputStream(uri)) {
+            if (input == null) return null;
+            while (count < head.length) {
+                final int read = input.read(head, count, head.length - count);
+                if (read <= 0) break;
+                count += read;
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+        if (count < 12) return null;
+        if (u8(head, 0) == 0x89 && u8(head, 1) == 0x50 && u8(head, 2) == 0x4E
+                && u8(head, 3) == 0x47) return "image/png";
+        if (u8(head, 0) == 0xFF && u8(head, 1) == 0xD8 && u8(head, 2) == 0xFF) return "image/jpeg";
+        if (u8(head, 0) == 0x47 && u8(head, 1) == 0x49 && u8(head, 2) == 0x46
+                && u8(head, 3) == 0x38) return "image/gif";
+        if (u8(head, 0) == 0x42 && u8(head, 1) == 0x4D) return "image/bmp";
+        if (u8(head, 0) == 0x1A && u8(head, 1) == 0x45 && u8(head, 2) == 0xDF
+                && u8(head, 3) == 0xA3) return "video/webm";
+        if (u8(head, 0) == 0x52 && u8(head, 1) == 0x49 && u8(head, 2) == 0x46
+                && u8(head, 3) == 0x46) {
+            if (u8(head, 8) == 0x57 && u8(head, 9) == 0x45 && u8(head, 10) == 0x42
+                    && u8(head, 11) == 0x50) return "image/webp";
+            if (u8(head, 8) == 0x41 && u8(head, 9) == 0x56 && u8(head, 10) == 0x49
+                    && u8(head, 11) == 0x20) return "video/x-msvideo";
+            return null;
+        }
+        /* ISO base media: brand at offset 8 says which family. */
+        if (u8(head, 4) == 0x66 && u8(head, 5) == 0x74 && u8(head, 6) == 0x79
+                && u8(head, 7) == 0x70) {
+            final String brand = new String(head, 8, 4,
+                    java.nio.charset.StandardCharsets.US_ASCII);
+            switch (brand) {
+                case "heic":
+                case "heix":
+                case "hevc":
+                case "hevx":
+                case "heim":
+                case "heis":
+                case "mif1":
+                case "msf1":
+                    return "image/heic";
+                case "avif":
+                case "avis":
+                    return "image/avif";
+                case "qt  ":
+                    return "video/quicktime";
+                case "3gp4":
+                case "3gp5":
+                case "3gp6":
+                case "3gs7":
+                    return "video/3gpp";
+                case "isom":
+                case "iso2":
+                case "mp41":
+                case "mp42":
+                case "avc1":
+                case "M4V":
+                case "M4VH":
+                case "M4VP":
+                case "dash":
+                    return "video/mp4";
+                default:
+                    return null;
+            }
+        }
+        return null;
+    }
+
+    private static int u8(byte[] bytes, int index) {
+        return bytes[index] & 0xFF;
     }
 
     private void addMediaFromUri(Uri uri, String mime, long maxBytes) {
@@ -151,8 +278,14 @@ final class ClipboardHistory {
     // ------------------------------------------------------------ mutations (UI)
 
     void remove(long id) {
+        remove(Collections.singletonList(id));
+    }
+
+    /** Deletes several entries at once (the panel's multi-select). */
+    void remove(Collection<Long> ids) {
+        if (ids.isEmpty()) return;
         executor.execute(() -> {
-            store.delete(id);
+            store.delete(ids);
             purgeOrphanMedia();
             refresh();
         });
@@ -206,6 +339,14 @@ final class ClipboardHistory {
         });
     }
 
+    /** Moves a quick-send entry to the top of the list. */
+    void pinQuickSend(long id) {
+        executor.execute(() -> {
+            store.touch(id);
+            refresh();
+        });
+    }
+
     /** Re-applies the cleanup policy (called by settings right after it changes). */
     void applyCleanupPolicy() {
         executor.execute(() -> {
@@ -235,10 +376,20 @@ final class ClipboardHistory {
             final File dir = new File(context.getFilesDir(), dirName);
             if (!dir.exists() && !dir.mkdirs()) return null;
             final File file = new File(dir, sha256Hex(bytes) + extensionFor(mime));
-            if (!file.exists()) {
+            if (file.exists() && file.length() == bytes.length) return file;
+            /* Write beside the target and rename: a kill mid-write must not
+             * leave a truncated file that later copies would reuse as
+             * "already present" (names are content hashes). */
+            final File tmp = new File(dir, file.getName() + ".tmp");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+                out.write(bytes);
+            }
+            if (!tmp.renameTo(file)) {
                 try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
                     out.write(bytes);
                 }
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
             }
             return file;
         } catch (Exception ignored) {
@@ -255,11 +406,13 @@ final class ClipboardHistory {
             case "image/x-ms-bmp": return ".bmp";
             case "image/heic":
             case "image/heif": return ".heic";
+            case "image/avif": return ".avif";
             case "video/mp4": return ".mp4";
             case "video/quicktime": return ".mov";
             case "video/webm": return ".webm";
             case "video/3gpp": return ".3gp";
             case "video/x-matroska": return ".mkv";
+            case "video/x-msvideo": return ".avi";
             default: return mime != null && mime.startsWith("video/") ? ".mp4" : ".jpg";
         }
     }

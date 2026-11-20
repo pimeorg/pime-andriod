@@ -1294,6 +1294,14 @@ public final class SettingsActivity extends AppCompatActivity {
     /** Clipboard history: cleanup policy, media budgets, and clearing data. */
     private void openClipboardSettings() {
         enterDetail(R.string.page_clipboard, parent -> {
+            addGroupTitle(parent, R.string.section_clipboard_capture);
+            final LinearLayout capture = addCard(parent);
+            addSwitchRow(capture, R.drawable.ic_clipboard,
+                    getString(R.string.row_clipboard_capture_sensitive),
+                    getString(R.string.row_clipboard_capture_sensitive_desc),
+                    Prefs.clipboardCaptureSensitive(this),
+                    (button, checked) -> Prefs.setClipboardCaptureSensitive(this, checked));
+
             addGroupTitle(parent, R.string.section_clipboard_cleanup);
             final LinearLayout cleanup = addCard(parent);
             addRow(cleanup, R.drawable.ic_trash, getString(R.string.row_clipboard_cleanup_mode),

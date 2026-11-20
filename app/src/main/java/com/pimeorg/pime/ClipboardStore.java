@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -137,6 +138,21 @@ final class ClipboardStore extends SQLiteOpenHelper {
         getWritableDatabase().delete(TABLE, "id = ?", new String[]{String.valueOf(id)});
     }
 
+    /** Deletes several rows (multi-select in the panel). */
+    synchronized void delete(Collection<Long> ids) {
+        if (ids.isEmpty()) return;
+        final StringBuilder where = new StringBuilder("id IN (");
+        final String[] args = new String[ids.size()];
+        int i = 0;
+        for (Long id : ids) {
+            if (i > 0) where.append(',');
+            where.append('?');
+            args[i++] = String.valueOf(id);
+        }
+        where.append(')');
+        getWritableDatabase().delete(TABLE, where.toString(), args);
+    }
+
     /** Clears the history but keeps quick-send items. */
     synchronized void deleteHistory() {
         getWritableDatabase().delete(TABLE, "is_quick_send = 0", null);
@@ -182,6 +198,14 @@ final class ClipboardStore extends SQLiteOpenHelper {
 
     synchronized void removeFromQuickSend(long id) {
         getWritableDatabase().delete(TABLE, "id = ? AND is_quick_send = 1",
+                new String[]{String.valueOf(id)});
+    }
+
+    /** Bumps a quick-send row to the top (the list is ordered by timestamp). */
+    synchronized void touch(long id) {
+        final ContentValues values = new ContentValues();
+        values.put("timestamp", System.currentTimeMillis());
+        getWritableDatabase().update(TABLE, values, "id = ? AND is_quick_send = 1",
                 new String[]{String.valueOf(id)});
     }
 

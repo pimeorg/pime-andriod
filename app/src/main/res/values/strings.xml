@@ -190,7 +190,6 @@
     <string name="voice_ready">语音模型已就绪，长按空格说话</string>
     <string name="voice_permission_needed">需要麦克风权限</string>
     <string name="voice_permission_granted">已获得麦克风权限，长按空格说话</string>
-    <string name="ime_paste_empty">剪贴板为空</string>
 
     <!-- plugins page: chain & plugin management -->
     <string name="section_chains">链方案</string>
@@ -275,9 +274,7 @@
 
     <!-- 剪切板面板 -->
     <string name="clipboard_title">剪切板</string>
-    <string name="clipboard_paste_current">粘贴当前</string>
     <string name="clipboard_quick_send">快捷输入</string>
-    <string name="clipboard_history">历史</string>
     <string name="clipboard_empty">还没有复制过内容</string>
     <string name="clipboard_quick_send_empty">把历史条目加入快捷输入，常用内容一点即用</string>
     <string name="clipboard_pin">置顶</string>
@@ -286,15 +283,22 @@
     <string name="clipboard_remove_quick_send">移出快捷输入</string>
     <string name="clipboard_delete">删除</string>
     <string name="clipboard_clear_history">清空历史</string>
-    <string name="clipboard_pinned">已置顶</string>
     <string name="clipboard_media_unreadable">这张图片或视频无法读取，或超过大小上限</string>
     <string name="clipboard_commit_unsupported">当前系统不支持直接插入图片或视频</string>
     <string name="clipboard_media_missing">文件已不存在</string>
+    <string name="clipboard_multi_select">多选</string>
+    <string name="clipboard_selected_count">已选 %1$d 项</string>
+    <string name="clipboard_cancel">取消</string>
+    <string name="clipboard_clear_confirm_message">将删除全部 %1$d 条历史，快捷输入保留</string>
+    <string name="clipboard_clear_confirm_action">清空</string>
 
     <!-- 剪切板设置 -->
     <string name="row_clipboard">剪切板</string>
     <string name="row_clipboard_desc">历史、快捷输入与清理</string>
     <string name="page_clipboard">剪切板</string>
+    <string name="section_clipboard_capture">采集</string>
+    <string name="row_clipboard_capture_sensitive">记录密码等敏感内容</string>
+    <string name="row_clipboard_capture_sensitive_desc">系统标记为敏感的剪贴板（如密码管理器复制的内容）默认不记入历史</string>
     <string name="section_clipboard_cleanup">清理</string>
     <string name="row_clipboard_cleanup_mode">清理方式</string>
     <string name="row_clipboard_cleanup_mode_desc">按条数、按天数，或从不清理</string>

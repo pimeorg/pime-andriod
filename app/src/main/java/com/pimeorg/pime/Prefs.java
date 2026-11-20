@@ -313,4 +313,16 @@ public final class Prefs {
     public static void setClipboardVideoBudgetMb(Context context, int value) {
         prefs(context).edit().putInt("clipboard_video_budget_mb", value).apply();
     }
+
+    /**
+     * Whether clips the system marks as sensitive (API 33+, e.g. password
+     * manager output) go into history. Off by default.
+     */
+    public static boolean clipboardCaptureSensitive(Context context) {
+        return prefs(context).getBoolean("clipboard_capture_sensitive", false);
+    }
+
+    public static void setClipboardCaptureSensitive(Context context, boolean value) {
+        prefs(context).edit().putBoolean("clipboard_capture_sensitive", value).apply();
+    }
 }
