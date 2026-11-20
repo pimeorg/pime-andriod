@@ -26,15 +26,16 @@ final class HandwritingRecognizer {
     private static final float CORRECT_NUM_STROKES_CAP = 10f;
     /**
      * Corner detection compares distances between neighbouring points. The pad
-     * samples every dp, which in this 0..255 space can be under one unit apart:
-     * touch jitter and rounding then dominate the ratios, and every wobble is
-     * taken for a corner — a six-substroke character explodes to thirty and no
-     * template is left in range. Points are resampled to this fraction of the
-     * ink's longer side, which restores the roughly ten-unit spacing the
+     * samples every dp, which once the ink fills the working space below is
+     * only a unit or two apart: touch jitter and rounding then dominate the
+     * ratios, and every wobble is taken for a corner — a six-substroke
+     * character explodes to thirty and no template is left in range. Points
+     * are resampled to this fraction of the ink's longer side, the spacing the
      * method was tuned for (a mouse crossing a 256px canvas).
      */
     private static final float RESAMPLE_DIVISOR = 16f;
-    private static final float MIN_RESAMPLE_SPACING = 4f;
+    /** Analysis stretches the ink so its longer side spans this much. */
+    private static final float INK_SIDE = 255f;
 
     static final class Match {
         final char hanzi;
@@ -75,7 +76,9 @@ final class HandwritingRecognizer {
     }
 
     /**
-     * @param strokes each entry is an array of {@code {x, y}} points in 0..255
+     * @param strokes each entry is an array of {@code {x, y}} points in any
+     *                uniform integer space — view pixels are fine; analysis
+     *                stretches the ink to its own 0..255 working space
      * @param limit   how many characters to return
      */
     List<Match> lookup(List<int[][]> strokes, int limit) {
@@ -269,9 +272,30 @@ final class HandwritingRecognizer {
         final Analyzed result = new Analyzed();
         final Rect bounds = boundingRect(strokes);
         if (bounds.isEmpty()) return result;
-        final float spacing = Math.max(MIN_RESAMPLE_SPACING, Math.max(
-                bounds.right - bounds.left, bounds.bottom - bounds.top) / RESAMPLE_DIVISOR);
-        for (int[][] raw : strokes) {
+        /* The ink arrives in view pixels, and the same character is drawn
+         * across a different number of them on the board and on the keyboard
+         * pad. Analyses that blend segments under an absolute length are not
+         * scale-free, so the same 好 segmented differently at different sizes
+         * and 她 could overtake it. Stretch the ink to fill the working space
+         * first: from here the analysis depends on the character's shape, not
+         * on how large it happened to be drawn. */
+        final float inkSide = Math.max(1f, Math.max(
+                bounds.right - bounds.left, bounds.bottom - bounds.top));
+        final float scale = INK_SIDE / inkSide;
+        final List<int[][]> stretched = new ArrayList<>(strokes.size());
+        for (int[][] stroke : strokes) {
+            final int[][] points = new int[stroke.length][];
+            for (int i = 0; i < stroke.length; ++i) {
+                points[i] = new int[]{
+                        Math.round((stroke[i][0] - bounds.left) * scale),
+                        Math.round((stroke[i][1] - bounds.top) * scale),
+                };
+            }
+            stretched.add(points);
+        }
+        final Rect inkBounds = boundingRect(stretched);
+        final float spacing = INK_SIDE / RESAMPLE_DIVISOR;
+        for (int[][] raw : stretched) {
             int[][] stroke = resample(raw, spacing);
             int[] pivots = pivotIndexes(stroke);
             for (int i = 1; i < pivots.length; ++i) {
@@ -283,9 +307,9 @@ final class HandwritingRecognizer {
                 if (normalizedDirection >= 256f) normalizedDirection = 0f;
                 SubStroke sub = new SubStroke();
                 sub.direction = normalizedDirection;
-                sub.length = Math.round(normalizedDistance(a, b, bounds) * 255f);
-                sub.centerX = Math.round(normalizedCenterX(a, b, bounds) * 15f);
-                sub.centerY = Math.round(normalizedCenterY(a, b, bounds) * 15f);
+                sub.length = Math.round(normalizedDistance(a, b, inkBounds) * 255f);
+                sub.centerX = Math.round(normalizedCenterX(a, b, inkBounds) * 15f);
+                sub.centerY = Math.round(normalizedCenterY(a, b, inkBounds) * 15f);
                 result.subStrokes.add(sub);
             }
         }
@@ -302,10 +326,6 @@ final class HandwritingRecognizer {
                 rect.bottom = Math.max(rect.bottom, point[1]);
             }
         }
-        if (rect.left > 255) rect.left = 0;
-        if (rect.right < 0) rect.right = 255;
-        if (rect.top > 255) rect.top = 0;
-        if (rect.bottom < 0) rect.bottom = 255;
         return rect;
     }
 

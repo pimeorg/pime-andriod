@@ -23,8 +23,8 @@ import java.util.List;
  *
  * <p>Collects finger strokes, draws them with the keyboard's palette, and hands
  * the finished ink to the listener after every lift so the table can show
- * fresh candidates. Points are reported in a 0..255 square, which is the
- * coordinate space the stroke templates were built in.
+ * fresh candidates. Points are reported in view pixels; the recogniser
+ * normalises by the ink's own extent, so no particular scale is required.
  *
  * <p>Every stroke dims a moment after it was written, strictly in the order it
  * was drawn — one stroke finishes dimming before the next begins — and stops
@@ -252,24 +252,24 @@ final class HandwritingView extends View {
     }
 
     private void emit() {
-        if (listener != null) listener.onInkChanged(normalized());
+        if (listener != null) listener.onInkChanged(inkPoints());
     }
 
-    private List<int[][]> normalized() {
+    /**
+     * The ink in view pixels. The recogniser stretches whatever it is given so
+     * the ink's longer side fills its 0..255 working space, so it needs a
+     * uniform space, not a particular size. Mapping into 0..255 here used to
+     * divide a character drawn at a comfortable size down to some sixty
+     * integer units, and one unit of rounding is then more than a percent of
+     * the character: 好's first stroke gained a corner and 她 overtook it.
+     */
+    private List<int[][]> inkPoints() {
         List<int[][]> result = new ArrayList<>(strokes.size());
-        /* One scale for both axes. The recogniser compares stroke directions
-         * against square templates, so scaling x by the width and y by the
-         * height would skew every diagonal on a pad that is not square — and
-         * the keyboard's pad is much wider than it is tall. */
-        final int side = Math.max(1, Math.max(getWidth(), getHeight()));
         for (Stroke stroke : strokes) {
             int[][] points = new int[stroke.points.size()][];
             for (int i = 0; i < stroke.points.size(); ++i) {
                 int[] point = stroke.points.get(i);
-                points[i] = new int[]{
-                        Math.max(0, Math.min(255, point[0] * 255 / side)),
-                        Math.max(0, Math.min(255, point[1] * 255 / side)),
-                };
+                points[i] = new int[]{point[0], point[1]};
             }
             result.add(points);
         }

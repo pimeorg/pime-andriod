@@ -71,6 +71,99 @@ public class HandwritingRecognizerTest {
                     + "|94,189 93,189 81,204 72,210 71,210"
                     + "|109,192 112,194 120,199 132,208 133,210 133,210";
 
+    /** 好 as Make Me a Hanzi draws it: six strokes, y down, 1024 canvas. */
+    private static final int[][][] HAO_MEDIANS = {
+            {{282, 112}, {307, 131}, {327, 167}, {264, 435}, {216, 579}, {235, 602}, {386, 706}, {411, 734}, {424, 767}},
+            {{390, 344}, {417, 370}, {424, 384}, {422, 396}, {387, 539}, {338, 645}, {304, 693}, {260, 735}, {206, 773}, {137, 803}},
+            {{59, 443}, {107, 466}, {373, 409}, {380, 399}},
+            {{493, 244}, {517, 254}, {550, 256}, {680, 208}, {706, 201}, {743, 204}, {771, 231}, {765, 243}, {677, 354}, {674, 365}, {663, 364}},
+            {{613, 370}, {637, 381}, {659, 401}, {674, 426}, {687, 468}, {711, 611}, {709, 734}, {692, 808}, {672, 841}, {648, 859}, {551, 815}},
+            {{449, 516}, {504, 523}, {860, 473}, {906, 474}, {960, 488}},
+    };
+
+    /**
+     * A hand is not a font: it places each stroke a little off, at a slightly
+     * different length and angle, with a slow drift along the path. Analysis
+     * used absolute thresholds, so the same 好 segmented differently depending
+     * on how large it was drawn — drawn small its first stroke gained a spare
+     * substroke and 她 overtook it.
+     */
+    @Test
+    public void recognisesTheSameHandwritingAtAnySize() throws Exception {
+        HandwritingRecognizer recognizer = recognizer();
+        /* Each of these drew 好 as 她 or 妈 while analysis still used absolute
+         * segment lengths; a slide back to those should fail here. */
+        double[] sizes = {255, 110, 70};
+        long[] seeds = {3, 2, 13};
+        for (int i = 0; i < sizes.length; ++i) {
+            List<HandwritingRecognizer.Match> matches =
+                    recognizer.lookup(sloppyHao(sizes[i], seeds[i]), 8);
+            assertEquals("drawn " + (int) sizes[i] + " units tall",
+                    '好', matches.get(0).hanzi);
+        }
+    }
+
+    /** 好 as a sloppy hand draws it, the skeleton's longer side spanning size. */
+    private static List<int[][]> sloppyHao(double size, long seed) {
+        final java.util.Random random = new java.util.Random(seed);
+        final double spacing = Math.max(0.7, size / 64);
+        List<int[][]> scaled = new ArrayList<>();
+        for (int[][] stroke : HAO_MEDIANS) {
+            /* Draw the skeleton as a finger would: a point every few units. */
+            List<double[]> points = new ArrayList<>();
+            points.add(new double[]{(stroke[0][0] - 59) * size / 901, (stroke[0][1] - 112) * size / 901});
+            for (int i = 1; i < stroke.length; ++i) {
+                final double x0 = (stroke[i - 1][0] - 59) * size / 901;
+                final double y0 = (stroke[i - 1][1] - 112) * size / 901;
+                final double x1 = (stroke[i][0] - 59) * size / 901;
+                final double y1 = (stroke[i][1] - 112) * size / 901;
+                final double segment = Math.hypot(x1 - x0, y1 - y0);
+                final int steps = Math.max(1, (int) (segment / spacing));
+                for (int step = 1; step <= steps; ++step) {
+                    points.add(new double[]{x0 + (x1 - x0) * step / steps,
+                            y0 + (y1 - y0) * step / steps});
+                }
+            }
+            double centerX = 0;
+            double centerY = 0;
+            for (double[] point : points) {
+                centerX += point[0] / points.size();
+                centerY += point[1] / points.size();
+            }
+            final double angle = Math.toRadians(random.nextGaussian() * 3);
+            final double stretch = 1 + random.nextGaussian() * 0.04;
+            final double driftX = random.nextGaussian() * 0.012 * size;
+            final double driftY = random.nextGaussian() * 0.012 * size;
+            final double wobble = 0.01 * size * random.nextDouble();
+            final double frequency = 0.6 + random.nextDouble() * 1.2;
+            final double phase = random.nextDouble() * Math.PI * 2;
+            int[][] result = new int[points.size()][];
+            double total = 0;
+            for (int i = 1; i < points.size(); ++i) {
+                total += Math.hypot(points.get(i)[0] - points.get(i - 1)[0],
+                        points.get(i)[1] - points.get(i - 1)[1]);
+            }
+            double travelled = 0;
+            for (int i = 0; i < points.size(); ++i) {
+                if (i > 0) {
+                    travelled += Math.hypot(points.get(i)[0] - points.get(i - 1)[0],
+                            points.get(i)[1] - points.get(i - 1)[1]);
+                }
+                final double x = (points.get(i)[0] - centerX) * stretch;
+                final double y = (points.get(i)[1] - centerY) * stretch;
+                result[i] = new int[]{
+                        (int) Math.round(centerX + x * Math.cos(angle) - y * Math.sin(angle)
+                                + driftX + random.nextGaussian() * 0.25),
+                        (int) Math.round(centerY + x * Math.sin(angle) + y * Math.cos(angle)
+                                + driftY + random.nextGaussian() * 0.25
+                                + wobble * Math.sin(frequency * 2 * Math.PI * travelled / total + phase)),
+                };
+            }
+            scaled.add(result);
+        }
+        return scaled;
+    }
+
     private static HandwritingRecognizer recognizer() throws Exception {
         byte[] data = Files.readAllBytes(Paths.get(
                 "src/main/assets/hanzi/mmah.bin"));
