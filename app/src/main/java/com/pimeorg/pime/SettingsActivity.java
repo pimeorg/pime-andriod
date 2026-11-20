@@ -71,6 +71,7 @@ public final class SettingsActivity extends AppCompatActivity {
     public static final String EXTRA_PAGE = "page";
     public static final String PAGE_TOOLBAR = "toolbar";
     public static final String PAGE_KEYBOARD = "keyboard";
+    public static final String PAGE_CLIPBOARD = "clipboard";
 
     private interface Page {
         void build(LinearLayout parent);
@@ -190,6 +191,8 @@ public final class SettingsActivity extends AppCompatActivity {
             openToolbarSettings();
         } else if (PAGE_KEYBOARD.equals(page)) {
             openSettings();
+        } else if (PAGE_CLIPBOARD.equals(page)) {
+            openClipboardSettings();
         }
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
@@ -215,6 +218,8 @@ public final class SettingsActivity extends AppCompatActivity {
             openToolbarSettings();
         } else if (PAGE_KEYBOARD.equals(page)) {
             openSettings();
+        } else if (PAGE_CLIPBOARD.equals(page)) {
+            openClipboardSettings();
         }
     }
 
@@ -249,6 +254,10 @@ public final class SettingsActivity extends AppCompatActivity {
         addRow(keyboard, R.drawable.ic_tune, getString(R.string.row_settings),
                 getString(R.string.row_settings_desc), R.drawable.ic_chevron_right,
                 v -> openSettings());
+        addDivider(keyboard);
+        addRow(keyboard, R.drawable.ic_clipboard, getString(R.string.row_clipboard),
+                getString(R.string.row_clipboard_desc), R.drawable.ic_chevron_right,
+                v -> openClipboardSettings());
         addDivider(keyboard);
         addRow(keyboard, R.drawable.ic_extension, getString(R.string.row_plugins),
                 pluginSummary(), R.drawable.ic_chevron_right, v -> openPlugins());
@@ -1278,6 +1287,181 @@ public final class SettingsActivity extends AppCompatActivity {
         final Intent intent = new Intent(PimeImeService.ACTION_DISPLAY_CHANGED);
         intent.setPackage(getPackageName());
         sendBroadcast(intent);
+    }
+
+    // --------------------------------------------------------------- clipboard
+
+    /** Clipboard history: cleanup policy, media budgets, and clearing data. */
+    private void openClipboardSettings() {
+        enterDetail(R.string.page_clipboard, parent -> {
+            addGroupTitle(parent, R.string.section_clipboard_cleanup);
+            final LinearLayout cleanup = addCard(parent);
+            addRow(cleanup, R.drawable.ic_trash, getString(R.string.row_clipboard_cleanup_mode),
+                    cleanupModeLabel(), 0, v -> chooseCleanupMode());
+            addDivider(cleanup);
+            addRow(cleanup, R.drawable.ic_view_list, getString(R.string.row_clipboard_max_items),
+                    getString(R.string.clipboard_items_value, Prefs.clipboardMaxItems(this)),
+                    0, v -> chooseMaxItems());
+            addDivider(cleanup);
+            addRow(cleanup, R.drawable.ic_fade, getString(R.string.row_clipboard_retain_days),
+                    getString(R.string.clipboard_days_value, Prefs.clipboardRetainDays(this)),
+                    0, v -> chooseRetainDays());
+
+            addGroupTitle(parent, R.string.section_clipboard_media);
+            final LinearLayout media = addCard(parent);
+            addRow(media, R.drawable.ic_copy, getString(R.string.row_clipboard_image_budget),
+                    budgetLabel(Prefs.clipboardImageBudgetMb(this)), 0,
+                    v -> chooseImageBudget());
+            addDivider(media);
+            addRow(media, R.drawable.ic_copy, getString(R.string.row_clipboard_video_budget),
+                    budgetLabel(Prefs.clipboardVideoBudgetMb(this)), 0,
+                    v -> chooseVideoBudget());
+
+            addGroupTitle(parent, R.string.section_clipboard_data);
+            final LinearLayout data = addCard(parent);
+            addRow(data, R.drawable.ic_trash, getString(R.string.row_clipboard_clear_history),
+                    getString(R.string.row_clipboard_clear_history_desc), 0,
+                    v -> clearClipboardHistory());
+            addDivider(data);
+            addRow(data, R.drawable.ic_trash, getString(R.string.row_clipboard_clear_all),
+                    getString(R.string.row_clipboard_clear_all_desc), 0,
+                    v -> clearClipboardAll());
+            addDivider(data);
+            addRow(data, R.drawable.ic_folder, getString(R.string.row_clipboard_clear_media),
+                    getString(R.string.row_clipboard_clear_media_desc), 0,
+                    v -> clearClipboardMedia());
+        });
+    }
+
+    private String cleanupModeLabel() {
+        switch (Prefs.clipboardCleanupMode(this)) {
+            case Prefs.CLIPBOARD_CLEANUP_DAYS:
+                return getString(R.string.clipboard_cleanup_days);
+            case Prefs.CLIPBOARD_CLEANUP_NONE:
+                return getString(R.string.clipboard_cleanup_none);
+            default:
+                return getString(R.string.clipboard_cleanup_count);
+        }
+    }
+
+    private String budgetLabel(int mb) {
+        return mb <= 0 ? getString(R.string.clipboard_budget_unlimited)
+                : getString(R.string.clipboard_budget_value, mb);
+    }
+
+    private void chooseCleanupMode() {
+        final String[] labels = {
+                getString(R.string.clipboard_cleanup_count),
+                getString(R.string.clipboard_cleanup_days),
+                getString(R.string.clipboard_cleanup_none),
+        };
+        final String[] modes = {
+                Prefs.CLIPBOARD_CLEANUP_COUNT,
+                Prefs.CLIPBOARD_CLEANUP_DAYS,
+                Prefs.CLIPBOARD_CLEANUP_NONE,
+        };
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.row_clipboard_cleanup_mode)
+                .setSingleChoiceItems(labels, indexOf(modes, Prefs.clipboardCleanupMode(this)),
+                        (dialog, which) -> {
+                            Prefs.setClipboardCleanupMode(this, modes[which]);
+                            dialog.dismiss();
+                            ClipboardHistory.getInstance(this).applyCleanupPolicy();
+                            rebuildDetail();
+                        })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void chooseMaxItems() {
+        final int[] values = Prefs.CLIPBOARD_MAX_ITEMS;
+        final CharSequence[] labels = new CharSequence[values.length];
+        for (int i = 0; i < values.length; i++) {
+            labels[i] = getString(R.string.clipboard_items_value, values[i]);
+        }
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.row_clipboard_max_items)
+                .setSingleChoiceItems(labels, indexOf(values, Prefs.clipboardMaxItems(this)),
+                        (dialog, which) -> {
+                            Prefs.setClipboardMaxItems(this, values[which]);
+                            dialog.dismiss();
+                            ClipboardHistory.getInstance(this).applyCleanupPolicy();
+                            rebuildDetail();
+                        })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void chooseRetainDays() {
+        final int[] values = Prefs.CLIPBOARD_RETAIN_DAYS;
+        final CharSequence[] labels = new CharSequence[values.length];
+        for (int i = 0; i < values.length; i++) {
+            labels[i] = getString(R.string.clipboard_days_value, values[i]);
+        }
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.row_clipboard_retain_days)
+                .setSingleChoiceItems(labels, indexOf(values, Prefs.clipboardRetainDays(this)),
+                        (dialog, which) -> {
+                            Prefs.setClipboardRetainDays(this, values[which]);
+                            dialog.dismiss();
+                            ClipboardHistory.getInstance(this).applyCleanupPolicy();
+                            rebuildDetail();
+                        })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void chooseImageBudget() {
+        chooseBudget(Prefs.clipboardImageBudgetMb(this), Prefs::setClipboardImageBudgetMb);
+    }
+
+    private void chooseVideoBudget() {
+        chooseBudget(Prefs.clipboardVideoBudgetMb(this), Prefs::setClipboardVideoBudgetMb);
+    }
+
+    /** Shared picker for the two media budgets; {@code setter} writes the choice. */
+    private void chooseBudget(int current, BudgetSetter setter) {
+        final int[] values = Prefs.CLIPBOARD_BUDGET_MB;
+        final CharSequence[] labels = new CharSequence[values.length];
+        for (int i = 0; i < values.length; i++) {
+            labels[i] = budgetLabel(values[i]);
+        }
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.section_clipboard_media)
+                .setSingleChoiceItems(labels, indexOf(values, current), (dialog, which) -> {
+                    setter.set(this, values[which]);
+                    dialog.dismiss();
+                    ClipboardHistory.getInstance(this).applyCleanupPolicy();
+                    rebuildDetail();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private interface BudgetSetter {
+        void set(android.content.Context context, int value);
+    }
+
+    private static int indexOf(String[] values, String value) {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i].equals(value)) return i;
+        }
+        return 0;
+    }
+
+    private void clearClipboardHistory() {
+        ClipboardHistory.getInstance(this).clearHistory();
+        snack(getString(R.string.clipboard_cleared));
+    }
+
+    private void clearClipboardAll() {
+        ClipboardHistory.getInstance(this).clearAll();
+        snack(getString(R.string.clipboard_cleared));
+    }
+
+    private void clearClipboardMedia() {
+        ClipboardHistory.getInstance(this).clearMediaCache();
+        snack(getString(R.string.clipboard_media_cleared));
     }
 
     /** Host-only display preferences; nothing here feeds the plugin chain. */

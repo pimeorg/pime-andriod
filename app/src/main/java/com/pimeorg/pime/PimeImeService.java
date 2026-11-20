@@ -358,6 +358,10 @@ public class PimeImeService extends InputMethodService
      */
     private boolean commitSeen;
     private BroadcastReceiver rebuildReceiver;
+    /** Clipboard history, created with the service; null until then. */
+    private ClipboardHistory clipboardHistory;
+    /** True while the key-area overlay (layout chooser or clipboard sheet) is up. */
+    private boolean clipboardOpen;
 
     /**
      * Two generations live side by side: the Chinese chain chosen in settings
@@ -404,6 +408,8 @@ public class PimeImeService extends InputMethodService
         super.onCreate();
         makeDataDirs();
         core = new PimeCore();
+        clipboardHistory = ClipboardHistory.getInstance(this);
+        clipboardHistory.setListener(this::onClipboardHistoryChanged);
         registerRebuildReceiver();
         /* The keys do not need the dictionaries to be drawn, and loading twenty
          * packages before the first frame is what used to hold the keyboard
@@ -724,6 +730,7 @@ public class PimeImeService extends InputMethodService
             unregisterReceiver(rebuildReceiver);
             rebuildReceiver = null;
         }
+        if (clipboardHistory != null) clipboardHistory.setListener(null);
         if (core != null) core.stop();
         super.onDestroy();
     }
@@ -1259,7 +1266,7 @@ public class PimeImeService extends InputMethodService
                 if (keyboard != null) keyboard.toggleLanguage();
                 break;
             case ImeToolbar.TOOL_PASTE:
-                pasteClipboard();
+                showClipboardPanel();
                 break;
             case ImeToolbar.TOOL_SETTINGS:
                 /* The gear sits on the toolbar, so it configures the toolbar
@@ -1557,6 +1564,7 @@ public class PimeImeService extends InputMethodService
     }
 
     private void dismissLayoutMenu() {
+        clipboardOpen = false;
         if (layoutOverlay == null
                 || layoutOverlay.getVisibility() != View.VISIBLE) return;
         layoutOverlay.setVisibility(View.GONE);
@@ -2325,21 +2333,127 @@ public class PimeImeService extends InputMethodService
         }
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
-        if (!composition.isEmpty()) {
-            if (coreReady) {
-                report(core.reset(), "reset");
-                core.pump();
-            }
-            composition = "";
-            if (compositionView != null) compositionView.setText("");
-            /* reset() drops the chain's candidate list too; hiding the row by
-             * hand keeps stale candidates from being tappable after a paste. */
-            hideCandidates();
-            ic.setComposingText("", 1);
-            ic.finishComposingText();
-        }
+        resetCompositionForCommit(ic);
         ic.commitText(text, 1);
         refreshSurrounding();
+    }
+
+    // ------------------------------------------------------- clipboard sheet
+
+    /**
+     * Shows the clipboard sheet in the key area, in the same overlay the layout
+     * chooser uses. Re-opening redraws from the cached history.
+     */
+    private void showClipboardPanel() {
+        if (inputWindowRoot == null || layoutOverlay == null
+                || layoutOverlayHost == null || clipboardHistory == null) return;
+        dismissCandidateMenu();
+        clipboardOpen = true;
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        final ClipboardPanel panel = new ClipboardPanel(this, palette,
+                clipboardPanelListener(),
+                clipboardHistory.quickSendItems(), clipboardHistory.history());
+        final int windowHeight = inputWindowRoot.getHeight() > 0
+                ? inputWindowRoot.getHeight()
+                : toolbarHeight() + keyboardHeight(palette);
+        final int height = Math.max(dp(160), windowHeight - dp(56));
+        layoutOverlayHost.removeAllViews();
+        layoutOverlayHost.addView(panel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, height));
+        final FrameLayout.LayoutParams overlayParams =
+                (FrameLayout.LayoutParams) layoutOverlay.getLayoutParams();
+        overlayParams.height = windowHeight;
+        layoutOverlay.setLayoutParams(overlayParams);
+        layoutOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private ClipboardPanel.Listener clipboardPanelListener() {
+        return new ClipboardPanel.Listener() {
+            @Override public void onInsert(ClipboardEntry entry) {
+                dismissLayoutMenu();
+                insertClipboardEntry(entry);
+            }
+            @Override public void onPasteCurrent() {
+                dismissLayoutMenu();
+                pasteClipboard();
+            }
+            @Override public void onClearHistory() {
+                clipboardHistory.clearHistory();
+            }
+            @Override public void onTogglePin(ClipboardEntry entry) {
+                clipboardHistory.togglePin(entry.id);
+            }
+            @Override public void onAddToQuickSend(ClipboardEntry entry) {
+                clipboardHistory.addToQuickSend(entry.id);
+            }
+            @Override public void onRemoveFromQuickSend(ClipboardEntry entry) {
+                clipboardHistory.removeFromQuickSend(entry.id);
+            }
+            @Override public void onDelete(ClipboardEntry entry) {
+                clipboardHistory.remove(entry.id);
+            }
+        };
+    }
+
+    /** The history changed on disk: redraw the sheet when it is on screen. */
+    private void onClipboardHistoryChanged() {
+        if (clipboardOpen) showClipboardPanel();
+    }
+
+    /** Ends a live composition so a commit replaces nothing it should not. */
+    private void resetCompositionForCommit(InputConnection ic) {
+        if (composition.isEmpty()) return;
+        if (coreReady) {
+            report(core.reset(), "reset");
+            core.pump();
+        }
+        composition = "";
+        if (compositionView != null) compositionView.setText("");
+        hideCandidates();
+        ic.setComposingText("", 1);
+        ic.finishComposingText();
+    }
+
+    /** Inserts one history entry: text as plain text, media via commitContent. */
+    private void insertClipboardEntry(ClipboardEntry entry) {
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        if (entry.isMedia()) {
+            insertClipboardMedia(ic, entry);
+            return;
+        }
+        resetCompositionForCommit(ic);
+        ic.commitText(entry.text, 1);
+        refreshSurrounding();
+    }
+
+    /** Sends a stored image/video to the editor through commitContent (API 25+). */
+    private void insertClipboardMedia(InputConnection ic, ClipboardEntry entry) {
+        if (android.os.Build.VERSION.SDK_INT < 25) {
+            toast(R.string.clipboard_commit_unsupported);
+            return;
+        }
+        final File file = new File(entry.mediaPath);
+        final android.net.Uri uri = file.exists()
+                ? clipboardHistory.contentUriFor(file) : null;
+        if (uri == null) {
+            toast(R.string.clipboard_media_missing);
+            return;
+        }
+        resetCompositionForCommit(ic);
+        boolean accepted = false;
+        try {
+            accepted = ic.commitContent(
+                    new android.view.inputmethod.InputContentInfo(uri,
+                            new android.content.ClipDescription("clipboard",
+                                    new String[]{entry.mime}), null),
+                    InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,
+                    null);
+        } catch (Exception error) {
+            Log.w(TAG, "commitContent failed", error);
+        }
+        if (!accepted) toast(R.string.clipboard_commit_unsupported);
     }
 
     /** Rounded pill with a themed ripple; {@code fill} 0 keeps it transparent. */

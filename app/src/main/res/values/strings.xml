@@ -129,8 +129,8 @@
     <string name="tool_language_desc">切换中文链与内置英文链</string>
     <string name="tool_voice">语音输入</string>
     <string name="tool_voice_desc">按住说话，松手提交</string>
-    <string name="tool_paste">粘贴</string>
-    <string name="tool_paste_desc">把剪贴板里的文字插入编辑器</string>
+    <string name="tool_paste">剪切板</string>
+    <string name="tool_paste_desc">打开剪切板历史与快捷输入</string>
     <string name="tool_settings">工具栏设置</string>
     <string name="tool_settings_desc">打开工具栏定制页，调整显示与顺序</string>
     <string name="tool_hide">收起键盘</string>
@@ -272,4 +272,55 @@
     <string name="plugin_label_format">候选排版</string>
     <string name="setting_label_max_candidates">最大候选数</string>
     <string name="setting_label_page_size">每页候选数</string>
+
+    <!-- 剪切板面板 -->
+    <string name="clipboard_title">剪切板</string>
+    <string name="clipboard_paste_current">粘贴当前</string>
+    <string name="clipboard_quick_send">快捷输入</string>
+    <string name="clipboard_history">历史</string>
+    <string name="clipboard_empty">还没有复制过内容</string>
+    <string name="clipboard_quick_send_empty">把历史条目加入快捷输入，常用内容一点即用</string>
+    <string name="clipboard_pin">置顶</string>
+    <string name="clipboard_unpin">取消置顶</string>
+    <string name="clipboard_add_quick_send">加入快捷输入</string>
+    <string name="clipboard_remove_quick_send">移出快捷输入</string>
+    <string name="clipboard_delete">删除</string>
+    <string name="clipboard_clear_history">清空历史</string>
+    <string name="clipboard_pinned">已置顶</string>
+    <string name="clipboard_media_unreadable">这张图片或视频无法读取，或超过大小上限</string>
+    <string name="clipboard_commit_unsupported">当前系统不支持直接插入图片或视频</string>
+    <string name="clipboard_media_missing">文件已不存在</string>
+
+    <!-- 剪切板设置 -->
+    <string name="row_clipboard">剪切板</string>
+    <string name="row_clipboard_desc">历史、快捷输入与清理</string>
+    <string name="page_clipboard">剪切板</string>
+    <string name="section_clipboard_cleanup">清理</string>
+    <string name="row_clipboard_cleanup_mode">清理方式</string>
+    <string name="row_clipboard_cleanup_mode_desc">按条数、按天数，或从不清理</string>
+    <string name="clipboard_cleanup_count">按条数</string>
+    <string name="clipboard_cleanup_days">按天数</string>
+    <string name="clipboard_cleanup_none">不清理</string>
+    <string name="row_clipboard_max_items">保留条数</string>
+    <string name="row_clipboard_max_items_desc">历史最多保留多少条（置顶与快捷输入不计入）</string>
+    <string name="row_clipboard_retain_days">保留天数</string>
+    <string name="row_clipboard_retain_days_desc">超过天数的普通历史自动删除</string>
+    <string name="clipboard_items_value">%1$d 条</string>
+    <string name="clipboard_days_value">%1$d 天</string>
+    <string name="section_clipboard_media">图片与视频</string>
+    <string name="row_clipboard_image_budget">图片占用空间</string>
+    <string name="row_clipboard_image_budget_desc">图片缓存的总体积上限，超出后删最旧的</string>
+    <string name="row_clipboard_video_budget">视频占用空间</string>
+    <string name="row_clipboard_video_budget_desc">视频缓存的总体积上限，超出后删最旧的</string>
+    <string name="clipboard_budget_unlimited">不限</string>
+    <string name="clipboard_budget_value">%1$d MB</string>
+    <string name="section_clipboard_data">数据</string>
+    <string name="row_clipboard_clear_history">清空历史</string>
+    <string name="row_clipboard_clear_history_desc">删除全部历史条目，保留快捷输入</string>
+    <string name="row_clipboard_clear_all">清空全部</string>
+    <string name="row_clipboard_clear_all_desc">删除历史、快捷输入与缓存图片视频</string>
+    <string name="clipboard_cleared">已清空</string>
+    <string name="row_clipboard_clear_media">清理媒体缓存</string>
+    <string name="row_clipboard_clear_media_desc">删除未被引用的图片与视频文件</string>
+    <string name="clipboard_media_cleared">已清理缓存文件</string>
 </resources>

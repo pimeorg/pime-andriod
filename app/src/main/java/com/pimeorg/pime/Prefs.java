@@ -33,6 +33,18 @@ public final class Prefs {
     /** 0 means "show every candidate the chain returns". */
     public static final int[] CANDIDATE_COUNTS = {0, 3, 5, 7, 9};
 
+    /* ---- clipboard history ---- */
+    public static final String CLIPBOARD_CLEANUP_COUNT = "count";
+    public static final String CLIPBOARD_CLEANUP_DAYS = "days";
+    public static final String CLIPBOARD_CLEANUP_NONE = "none";
+
+    /** History row limits offered in settings. */
+    public static final int[] CLIPBOARD_MAX_ITEMS = {50, 100, 200, 500, 1000};
+    /** Retention windows (days) offered when cleanup is by age. */
+    public static final int[] CLIPBOARD_RETAIN_DAYS = {1, 3, 7, 30};
+    /** Media directory budgets (MB); 0 = unlimited. */
+    public static final int[] CLIPBOARD_BUDGET_MB = {0, 50, 100, 200, 500};
+
     /**
      * How long after a stroke lands that stroke starts to dim; 0 keeps every
      * stroke at full strength until the user clears or commits.
@@ -253,5 +265,52 @@ public final class Prefs {
 
     public static void setChainBaseline(Context context, String name, String hash) {
         prefs(context).edit().putString("chain_baseline/" + name, hash).apply();
+    }
+
+    // ------------------------------------------------------------ clipboard
+
+    /** How many history rows to keep when cleanup is by count. */
+    public static int clipboardMaxItems(Context context) {
+        return prefs(context).getInt("clipboard_max_items", 200);
+    }
+
+    public static void setClipboardMaxItems(Context context, int value) {
+        prefs(context).edit().putInt("clipboard_max_items", value).apply();
+    }
+
+    /** {@link #CLIPBOARD_CLEANUP_COUNT}, {@link #CLIPBOARD_CLEANUP_DAYS} or {@link #CLIPBOARD_CLEANUP_NONE}. */
+    public static String clipboardCleanupMode(Context context) {
+        return prefs(context).getString("clipboard_cleanup_mode", CLIPBOARD_CLEANUP_COUNT);
+    }
+
+    public static void setClipboardCleanupMode(Context context, String value) {
+        prefs(context).edit().putString("clipboard_cleanup_mode", value).apply();
+    }
+
+    /** Days to keep when cleanup is by age. */
+    public static int clipboardRetainDays(Context context) {
+        return prefs(context).getInt("clipboard_retain_days", 7);
+    }
+
+    public static void setClipboardRetainDays(Context context, int value) {
+        prefs(context).edit().putInt("clipboard_retain_days", value).apply();
+    }
+
+    /** Image directory budget in MB; 0 = unlimited. */
+    public static int clipboardImageBudgetMb(Context context) {
+        return prefs(context).getInt("clipboard_image_budget_mb", 100);
+    }
+
+    public static void setClipboardImageBudgetMb(Context context, int value) {
+        prefs(context).edit().putInt("clipboard_image_budget_mb", value).apply();
+    }
+
+    /** Video directory budget in MB; 0 = unlimited. */
+    public static int clipboardVideoBudgetMb(Context context) {
+        return prefs(context).getInt("clipboard_video_budget_mb", 200);
+    }
+
+    public static void setClipboardVideoBudgetMb(Context context, int value) {
+        prefs(context).edit().putInt("clipboard_video_budget_mb", value).apply();
     }
 }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files the clipboard history hands to the editor via commitContent. -->
+<paths>
+    <files-path name="clipboard_images" path="clipboard_images/" />
+    <files-path name="clipboard_videos" path="clipboard_videos/" />
+    <cache-path name="clipboard_cache" path="." />
+</paths>
