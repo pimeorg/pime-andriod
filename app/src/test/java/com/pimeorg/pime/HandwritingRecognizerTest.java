@@ -95,6 +95,69 @@ public class HandwritingRecognizerTest {
         assertTrue(yuan.size() > 1);
     }
 
+    /**
+     * The pad reports a point per dp, which in the recogniser's 0..255 space is
+     * under one unit apart — far denser than the mouse traces above. At that
+     * density touch jitter used to be read as a corner at every wobble, so a
+     * six-substroke character produced thirty, no template stayed within the
+     * loosened stroke range, and the candidate list came back empty or wrong.
+     */
+    @Test
+    public void recognisesDenselySampledInk() throws Exception {
+        HandwritingRecognizer recognizer = recognizer();
+        String[][] samples = {
+                {"一", YI}, {"十", SHI}, {"元", YUAN}, {"氣", QI},
+        };
+        for (String[] sample : samples) {
+            List<HandwritingRecognizer.Match> matches =
+                    recognizer.lookup(denseJittered(parse(sample[1])), 8);
+            int rank = -1;
+            for (int i = 0; i < matches.size(); ++i) {
+                if (matches.get(i).hanzi == sample[0].charAt(0)) rank = i + 1;
+            }
+            assertTrue(sample[0] + " came back at rank " + rank,
+                    rank > 0 && rank <= 5);
+        }
+    }
+
+    /** Samples the polyline every 0.7 units (the pad's spacing) plus touch jitter. */
+    private static List<int[][]> denseJittered(List<int[][]> strokes) {
+        java.util.Random random = new java.util.Random(11);
+        final double spacing = 0.7;
+        List<int[][]> result = new ArrayList<>();
+        for (int[][] stroke : strokes) {
+            List<double[]> path = new ArrayList<>();
+            double total = 0;
+            double[] cumulative = new double[stroke.length];
+            path.add(new double[]{stroke[0][0], stroke[0][1]});
+            for (int i = 1; i < stroke.length; ++i) {
+                double dx = stroke[i][0] - stroke[i - 1][0];
+                double dy = stroke[i][1] - stroke[i - 1][1];
+                total += Math.sqrt(dx * dx + dy * dy);
+                cumulative[i] = total;
+                path.add(new double[]{stroke[i][0], stroke[i][1]});
+            }
+            List<int[]> dense = new ArrayList<>();
+            int segment = 1;
+            for (double at = 0; at <= total; at += spacing) {
+                while (segment < path.size() - 1 && cumulative[segment] < at) ++segment;
+                double from = cumulative[segment - 1];
+                double length = cumulative[segment] - from;
+                double t = length <= 0 ? 0 : (at - from) / length;
+                double x = path.get(segment - 1)[0]
+                        + (path.get(segment)[0] - path.get(segment - 1)[0]) * t;
+                double y = path.get(segment - 1)[1]
+                        + (path.get(segment)[1] - path.get(segment - 1)[1]) * t;
+                dense.add(new int[]{
+                        (int) Math.round(x + random.nextGaussian() * 0.25),
+                        (int) Math.round(y + random.nextGaussian() * 0.25),
+                });
+            }
+            result.add(dense.toArray(new int[0][]));
+        }
+        return result;
+    }
+
     @Test
     public void firstStrokeBucketsFollowDirection() {
         assertEquals(HanziData.STROKE_HENG, HanziData.strokeBucket(0));

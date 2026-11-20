@@ -257,15 +257,18 @@ final class HandwritingView extends View {
 
     private List<int[][]> normalized() {
         List<int[][]> result = new ArrayList<>(strokes.size());
-        final int width = Math.max(1, getWidth());
-        final int height = Math.max(1, getHeight());
+        /* One scale for both axes. The recogniser compares stroke directions
+         * against square templates, so scaling x by the width and y by the
+         * height would skew every diagonal on a pad that is not square — and
+         * the keyboard's pad is much wider than it is tall. */
+        final int side = Math.max(1, Math.max(getWidth(), getHeight()));
         for (Stroke stroke : strokes) {
             int[][] points = new int[stroke.points.size()][];
             for (int i = 0; i < stroke.points.size(); ++i) {
                 int[] point = stroke.points.get(i);
                 points[i] = new int[]{
-                        Math.max(0, Math.min(255, point[0] * 255 / width)),
-                        Math.max(0, Math.min(255, point[1] * 255 / height)),
+                        Math.max(0, Math.min(255, point[0] * 255 / side)),
+                        Math.max(0, Math.min(255, point[1] * 255 / side)),
                 };
             }
             result.add(points);

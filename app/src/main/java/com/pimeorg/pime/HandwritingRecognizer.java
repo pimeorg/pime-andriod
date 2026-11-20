@@ -24,6 +24,17 @@ final class HandwritingRecognizer {
     private static final float SKIP_PENALTY_MULTIPLIER = 1.75f;
     private static final float CORRECT_NUM_STROKES_BONUS = 0.1f;
     private static final float CORRECT_NUM_STROKES_CAP = 10f;
+    /**
+     * Corner detection compares distances between neighbouring points. The pad
+     * samples every dp, which in this 0..255 space can be under one unit apart:
+     * touch jitter and rounding then dominate the ratios, and every wobble is
+     * taken for a corner — a six-substroke character explodes to thirty and no
+     * template is left in range. Points are resampled to this fraction of the
+     * ink's longer side, which restores the roughly ten-unit spacing the
+     * method was tuned for (a mouse crossing a 256px canvas).
+     */
+    private static final float RESAMPLE_DIVISOR = 16f;
+    private static final float MIN_RESAMPLE_SPACING = 4f;
 
     static final class Match {
         final char hanzi;
@@ -258,7 +269,10 @@ final class HandwritingRecognizer {
         final Analyzed result = new Analyzed();
         final Rect bounds = boundingRect(strokes);
         if (bounds.isEmpty()) return result;
-        for (int[][] stroke : strokes) {
+        final float spacing = Math.max(MIN_RESAMPLE_SPACING, Math.max(
+                bounds.right - bounds.left, bounds.bottom - bounds.top) / RESAMPLE_DIVISOR);
+        for (int[][] raw : strokes) {
+            int[][] stroke = resample(raw, spacing);
             int[] pivots = pivotIndexes(stroke);
             for (int i = 1; i < pivots.length; ++i) {
                 int[] a = stroke[pivots[i - 1]];
@@ -350,6 +364,59 @@ final class HandwritingRecognizer {
             y = y - rect.top;
         }
         return (float) (y / side);
+    }
+
+    /**
+     * Walks the polyline and keeps a point every {@code spacing} units of arc
+     * length, plus the first and last point. A stroke shorter than the spacing
+     * survives as its two endpoints, so a 点 stays a short substroke instead of
+     * disappearing.
+     *
+     * <p>Interior points then get a light [1 2 1] blur: a fingertip wobbles by
+     * a pixel or two, and at this spacing that wobble is a sizeable fraction of
+     * the ratio corner detection compares. The blur rounds corners by only a
+     * fraction of the character's size and keeps those ratios below the
+     * threshold.
+     */
+    private static int[][] resample(int[][] points, float spacing) {
+        if (points.length <= 1) return points;
+        final List<int[]> resampled = new ArrayList<>();
+        resampled.add(points[0]);
+        float carry = 0f;
+        for (int i = 1; i < points.length; ++i) {
+            final int[] from = points[i - 1];
+            final int[] to = points[i];
+            final double dx = to[0] - from[0];
+            final double dy = to[1] - from[1];
+            final double segment = Math.sqrt(dx * dx + dy * dy);
+            if (segment <= 0) continue;
+            double at = spacing - carry;
+            while (at <= segment) {
+                final double t = at / segment;
+                final int x = (int) Math.round(from[0] + dx * t);
+                final int y = (int) Math.round(from[1] + dy * t);
+                final int[] last = resampled.get(resampled.size() - 1);
+                if (x != last[0] || y != last[1]) resampled.add(new int[]{x, y});
+                at += spacing;
+            }
+            carry = (float) (segment - (at - spacing));
+        }
+        final int[] last = resampled.get(resampled.size() - 1);
+        final int[] end = points[points.length - 1];
+        /* A tap has start == end; keep both points so the stroke still yields
+         * one (zero-length) substroke instead of vanishing from the ink. */
+        if (resampled.size() == 1 || end[0] != last[0] || end[1] != last[1]) {
+            resampled.add(new int[]{end[0], end[1]});
+        }
+        final int[][] stroke = resampled.toArray(new int[0][]);
+        final int[][] smoothed = stroke.clone();
+        for (int i = 1; i + 1 < stroke.length; ++i) {
+            smoothed[i] = new int[]{
+                    (stroke[i - 1][0] + 2 * stroke[i][0] + stroke[i + 1][0] + 2) / 4,
+                    (stroke[i - 1][1] + 2 * stroke[i][1] + stroke[i + 1][1] + 2) / 4,
+            };
+        }
+        return smoothed;
     }
 
     private static int[] pivotIndexes(int[][] points) {
