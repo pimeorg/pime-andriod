@@ -7,7 +7,12 @@ import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.SpannableString;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.util.LruCache;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -24,8 +29,10 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -38,9 +45,17 @@ import java.util.Set;
  * is a preview and nothing else. Multi-select batches deletes from a bottom
  * bar; clearing the history asks for confirmation first.
  *
- * <p>It is a plain view, not an overlay of its own: the host mounts it inside
- * the same key-area overlay the layout chooser uses, so the two sheets never
- * fight for the window.
+ * <p>A magnifier left of the clear-history button turns the header into a
+ * search field (hint text, blinking caret, 取消 on the right) that filters the
+ * current tab's cards as the search text changes. The field is a plain
+ * text view, not an edit control: the keys under the sheet belong to the IME,
+ * so the service routes them here while the field is open (see
+ * {@code PimeImeService#onKey}) and nothing is committed to the editor.
+ *
+ * <p>It is a plain view, not an overlay of its own: the sheet is mounted in
+ * the same key-area overlay the layout chooser uses, while the search mode is
+ * mounted above the keyboard so the keys stay usable — the window grows for
+ * it instead of covering them.
  */
 final class ClipboardPanel extends FrameLayout {
 
@@ -66,12 +81,24 @@ final class ClipboardPanel extends FrameLayout {
 
         /** The sheet switched tabs; remembered across rebuilds. */
         void onTabChanged(int tab);
+
+        /** The magnifier was tapped: the host swaps the sheet for a search field. */
+        void onSearchOpen();
+
+        /** 取消 in the field: back to the tabbed sheet. */
+        void onSearchClose();
+
+        /** The query changed; kept so a rebuild (history edit) restores it. */
+        void onSearchQueryChanged(String query);
     }
 
     private static final int TAB_CLIPBOARD = 0;
     private static final int TAB_QUICK_SEND = 1;
 
     private static final int CARD_HEIGHT_DP = 62;
+    /** Search results are single-line rows, one per match, like the reference. */
+    private static final int SEARCH_ROW_HEIGHT_DP = 48;
+    private static final long CARET_BLINK_MS = 500;
     /** Decode box for grid thumbnails; also bounds the bitmap cache. */
     private static final int THUMB_MAX_PX = 384;
 
@@ -99,18 +126,35 @@ final class ClipboardPanel extends FrameLayout {
     private final RecyclerView grid;
     private final TextView emptyView;
 
+    /** Search mode is fixed per instance: opening/closing rebuilds the panel. */
+    private final boolean searching;
+    private final Handler caretHandler = new Handler(Looper.getMainLooper());
+    private final Runnable caretBlink = new Runnable() {
+        @Override
+        public void run() {
+            caretOn = !caretOn;
+            renderSearchField();
+            caretHandler.postDelayed(this, CARET_BLINK_MS);
+        }
+    };
+    private TextView searchField;
+    private String query;
+    private boolean caretOn = true;
+
     private int tab;
     private boolean multiSelect;
     private HistoryAdapter adapter;
 
     ClipboardPanel(Context context, KeyboardTheme palette, Listener listener,
                    List<ClipboardEntry> quickSend, List<ClipboardEntry> history,
-                   int initialTab) {
+                   int initialTab, boolean searchMode, String initialQuery) {
         super(context);
         this.palette = palette;
         this.listener = listener;
         this.history = history;
         this.quickSend = quickSend;
+        this.searching = searchMode;
+        this.query = initialQuery == null ? "" : initialQuery;
         setBackground(panelBackground());
         /* Empty sheet space belongs to the sheet: a tap on it must not fall
          * through to the dismiss-cover drawn behind the overlay. */
@@ -135,7 +179,7 @@ final class ClipboardPanel extends FrameLayout {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         grid = new RecyclerView(context);
-        grid.setLayoutManager(new GridLayoutManager(context, 2));
+        grid.setLayoutManager(new GridLayoutManager(context, searching ? 1 : 2));
         grid.setItemAnimator(null);
         grid.setClipToPadding(false);
         body.addView(grid, new FrameLayout.LayoutParams(
@@ -156,6 +200,72 @@ final class ClipboardPanel extends FrameLayout {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
 
         showTab(initialTab);
+        if (searching) {
+            renderSearchField();
+            caretHandler.postDelayed(caretBlink, CARET_BLINK_MS);
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        caretHandler.removeCallbacks(caretBlink);
+        super.onDetachedFromWindow();
+    }
+
+    // ------------------------------------------------------------ search
+
+    /** Appends typed text (a committed character, a word, a space). */
+    void appendSearchText(String text) {
+        if (text == null || text.isEmpty()) return;
+        query += text;
+        caretOn = true;
+        renderSearchField();
+        refreshGrid();
+        if (listener != null) listener.onSearchQueryChanged(query);
+    }
+
+    /** Deletes one character (a code point) before the caret. */
+    void deleteSearchChar() {
+        if (query.isEmpty()) return;
+        final int cut = query.offsetByCodePoints(query.length(), -1);
+        query = query.substring(0, cut);
+        caretOn = true;
+        renderSearchField();
+        refreshGrid();
+        if (listener != null) listener.onSearchQueryChanged(query);
+    }
+
+    /** Clears the query (the keyboard's clear swipe while searching). */
+    void clearSearchText() {
+        if (query.isEmpty()) return;
+        query = "";
+        caretOn = true;
+        renderSearchField();
+        refreshGrid();
+        if (listener != null) listener.onSearchQueryChanged(query);
+    }
+
+    /** Hint while empty, the query otherwise, with the blinking caret appended. */
+    private void renderSearchField() {
+        if (searchField == null) return;
+        final boolean empty = query.isEmpty();
+        final SpannableString text = new SpannableString(empty
+                ? getContext().getString(R.string.clipboard_search_hint) : query);
+        searchField.setTextColor(empty ? palette.hint : palette.candidateText);
+        if (caretOn) {
+            final int start = text.length();
+            final String withCaret = text + "|";
+            final SpannableString spanned = new SpannableString(withCaret);
+            if (!empty) {
+                spanned.setSpan(new ForegroundColorSpan(palette.candidateText), 0, start,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            spanned.setSpan(new ForegroundColorSpan(palette.accent), start, withCaret.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            searchField.setText(spanned);
+        } else {
+            searchField.setText(text);
+        }
     }
 
     // ------------------------------------------------------------ tabs
@@ -165,21 +275,76 @@ final class ClipboardPanel extends FrameLayout {
         tab = newTab == TAB_QUICK_SEND ? TAB_QUICK_SEND : TAB_CLIPBOARD;
         multiSelect = false;
         selected.clear();
-        final List<ClipboardEntry> items = tab == TAB_CLIPBOARD ? history : quickSend;
-        adapter = new HistoryAdapter(items);
-        grid.setAdapter(adapter);
-        final boolean empty = items.isEmpty();
-        grid.setVisibility(empty ? View.GONE : View.VISIBLE);
-        emptyView.setText(tab == TAB_CLIPBOARD
-                ? R.string.clipboard_empty : R.string.clipboard_quick_send_empty);
-        emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
         fillHeader();
+        refreshGrid();
         updateBottomBar();
         if (listener != null) listener.onTabChanged(tab);
     }
 
+    /** The current tab's entries, narrowed by the query while searching. */
+    private void refreshGrid() {
+        final List<ClipboardEntry> source = tab == TAB_CLIPBOARD ? history : quickSend;
+        List<ClipboardEntry> items = source;
+        if (searching && !query.isEmpty()) {
+            final String needle = query.toLowerCase(Locale.ROOT);
+            items = new ArrayList<>();
+            for (ClipboardEntry entry : source) {
+                if (entryLabel(entry).toLowerCase(Locale.ROOT).contains(needle)) {
+                    items.add(entry);
+                }
+            }
+        }
+        adapter = new HistoryAdapter(items);
+        grid.setAdapter(adapter);
+        final boolean empty = items.isEmpty();
+        grid.setVisibility(empty ? View.GONE : View.VISIBLE);
+        emptyView.setText(searching && !query.isEmpty()
+                ? R.string.clipboard_search_empty
+                : tab == TAB_CLIPBOARD
+                        ? R.string.clipboard_empty : R.string.clipboard_quick_send_empty);
+        emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
+    }
+
     private void fillHeader() {
         header.removeAllViews();
+
+        if (searching) {
+            final LinearLayout pill = new LinearLayout(getContext());
+            pill.setOrientation(LinearLayout.HORIZONTAL);
+            pill.setGravity(Gravity.CENTER_VERTICAL);
+            pill.setPadding(dp(14), 0, dp(8), 0);
+            final GradientDrawable pillFill = new GradientDrawable();
+            pillFill.setCornerRadius(dp(17));
+            pillFill.setColor(palette.rail);
+            pill.setBackground(pillFill);
+
+            searchField = label("", 14, false, palette.candidateText);
+            searchField.setSingleLine(true);
+            searchField.setEllipsize(TextUtils.TruncateAt.END);
+            searchField.setGravity(Gravity.CENTER_VERTICAL);
+            pill.addView(searchField, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+            final LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
+                    0, dp(34), 1f);
+            pillParams.gravity = Gravity.CENTER_VERTICAL;
+            header.addView(pill, pillParams);
+
+            final TextView cancel = label(getContext().getString(R.string.clipboard_cancel),
+                    13, false, palette.candidateText);
+            cancel.setGravity(Gravity.CENTER);
+            cancel.setSingleLine(true);
+            cancel.setPadding(dp(12), 0, dp(6), 0);
+            cancel.setBackground(transparentRounded(8));
+            cancel.setOnClickListener(v -> {
+                if (listener != null) listener.onSearchClose();
+            });
+            final LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            cancelParams.gravity = Gravity.CENTER_VERTICAL;
+            header.addView(cancel, cancelParams);
+            return;
+        }
 
         /* Segmented switch: a soft-accent track with the active tab in the
          * accent colour (same shape as the reference implementation). */
@@ -199,6 +364,12 @@ final class ClipboardPanel extends FrameLayout {
 
         header.addView(new View(getContext()), new LinearLayout.LayoutParams(0, 0, 1f));
 
+        if (!multiSelect) {
+            header.addView(iconAction(R.drawable.ic_search, R.string.clipboard_search,
+                    v -> {
+                        if (listener != null) listener.onSearchOpen();
+                    }));
+        }
         if (tab == TAB_CLIPBOARD && !multiSelect) {
             header.addView(iconAction(R.drawable.ic_trash, R.string.clipboard_clear_history,
                     v -> showClearConfirm()));
@@ -321,6 +492,9 @@ final class ClipboardPanel extends FrameLayout {
 
         @Override
         public int getItemViewType(int position) {
+            /* Search results are text rows, media included: only the searchable
+             * text is shown, not a tile. */
+            if (searching) return TYPE_TEXT;
             final ClipboardEntry entry = entries.get(position);
             return entry.isImage() ? TYPE_IMAGE : entry.isVideo() ? TYPE_VIDEO : TYPE_TEXT;
         }
@@ -329,7 +503,8 @@ final class ClipboardPanel extends FrameLayout {
         public Holder onCreateViewHolder(ViewGroup parent, int viewType) {
             final FrameLayout card = new FrameLayout(parent.getContext());
             final GridLayoutManager.LayoutParams params = new GridLayoutManager.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(CARD_HEIGHT_DP));
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(searching ? SEARCH_ROW_HEIGHT_DP : CARD_HEIGHT_DP));
             params.setMargins(dp(3), dp(3), dp(3), dp(3));
             card.setLayoutParams(params);
             /* Ripple in the foreground: the image tile would hide a background ripple. */
@@ -338,7 +513,7 @@ final class ClipboardPanel extends FrameLayout {
             final Holder holder;
             if (viewType == TYPE_TEXT) {
                 final TextView text = label("", 14, false, palette.candidateText);
-                text.setMaxLines(2);
+                text.setMaxLines(searching ? 1 : 2);
                 text.setEllipsize(TextUtils.TruncateAt.END);
                 text.setPadding(dp(10), dp(9), dp(10), dp(9));
                 text.setGravity(Gravity.CENTER_VERTICAL);
@@ -388,7 +563,24 @@ final class ClipboardPanel extends FrameLayout {
             holder.itemView.setBackground(cardBackground(entry));
 
             if (holder.text != null) {
-                holder.text.setText(entry.text);
+                if (!searching || query.isEmpty()) {
+                    holder.text.setText(entryLabel(entry));
+                    return;
+                }
+                /* Paint every hit in the accent colour, like the reference. */
+                final String source = entryLabel(entry);
+                final String haystack = source.toLowerCase(Locale.ROOT);
+                final String needle = query.toLowerCase(Locale.ROOT);
+                final SpannableString highlighted = new SpannableString(source);
+                int from = 0;
+                while (true) {
+                    final int at = haystack.indexOf(needle, from);
+                    if (at < 0) break;
+                    highlighted.setSpan(new ForegroundColorSpan(palette.accent),
+                            at, at + needle.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    from = at + needle.length();
+                }
+                holder.text.setText(highlighted);
                 return;
             }
             if (entry.isImage()) {
@@ -549,10 +741,15 @@ final class ClipboardPanel extends FrameLayout {
                 removeView(scrim);
                 if (listener != null) listener.onAddToQuickSend(entry);
             }));
-            menu.addView(menuItem(R.drawable.ic_view_list, R.string.clipboard_multi_select, v -> {
-                removeView(scrim);
-                enterMultiSelect(entry);
-            }));
+            /* Search rows are a flat result list; batching deletes stays a
+             * gesture of the tabbed sheet. */
+            if (!searching) {
+                menu.addView(menuItem(R.drawable.ic_view_list,
+                        R.string.clipboard_multi_select, v -> {
+                            removeView(scrim);
+                            enterMultiSelect(entry);
+                        }));
+            }
             menu.addView(menuItem(R.drawable.ic_trash, R.string.clipboard_delete, v -> {
                 removeView(scrim);
                 if (listener != null) listener.onDelete(entry);

@@ -289,6 +289,9 @@
     <string name="clipboard_multi_select">多选</string>
     <string name="clipboard_selected_count">已选 %1$d 项</string>
     <string name="clipboard_cancel">取消</string>
+    <string name="clipboard_search">搜索</string>
+    <string name="clipboard_search_hint">输入关键词，搜索剪贴板内容</string>
+    <string name="clipboard_search_empty">没有找到相关内容</string>
     <string name="clipboard_clear_confirm_message">将删除全部 %1$d 条历史，快捷输入保留</string>
     <string name="clipboard_clear_confirm_action">清空</string>
 

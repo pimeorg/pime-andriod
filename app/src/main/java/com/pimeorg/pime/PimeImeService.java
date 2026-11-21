@@ -364,6 +364,18 @@ public class PimeImeService extends InputMethodService
     private boolean clipboardOpen;
     /** Which tab the clipboard sheet was last on; kept across sheet rebuilds. */
     private int clipboardPanelTab;
+    /**
+     * The sheet is replaced by a search field above the keys (the window grows
+     * so the keys stay usable). Keys route to the field instead of the chain's
+     * editor while this is set.
+     */
+    private boolean clipboardSearching;
+    /** Query being typed; panel rebuilds (history edits) restore it. */
+    private String clipboardSearchQuery = "";
+    /** Search-mode panel mounted above the keys; null while the sheet is up. */
+    private ClipboardPanel clipboardPanel;
+    /** Grows the input view above the toolbar for the search panel. */
+    private FrameLayout clipboardSearchHost;
 
     /**
      * Two generations live side by side: the Chinese chain chosen in settings
@@ -749,6 +761,15 @@ public class PimeImeService extends InputMethodService
         root.setGravity(Gravity.BOTTOM);
         root.setBackgroundColor(palette.board);
         inputRoot = root;
+
+        /* Clipboard search takes the top of the input view instead of the key
+         * area, so the keys under it keep working; at height 0/GONE it is
+         * invisible and the window keeps its normal size. */
+        clipboardSearchHost = new FrameLayout(this);
+        clipboardSearchHost.setPadding(dp(6), dp(6), dp(6), dp(6));
+        clipboardSearchHost.setVisibility(View.GONE);
+        root.addView(clipboardSearchHost, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0));
 
         /* Handwriting's 全屏 grows the window by pushing this spacer above the
          * toolbar; at 0 it takes no room and the keyboard keeps its height. */
@@ -1383,9 +1404,7 @@ public class PimeImeService extends InputMethodService
         /* The sheet lives in the key area, so it may use the keyboard's own
          * height; the chevron keeps its strip at the top. Longer chain lists
          * scroll inside the panel. */
-        final int windowHeight = inputWindowRoot.getHeight() > 0
-                ? inputWindowRoot.getHeight()
-                : toolbarHeight() + keyboardHeight(palette);
+        final int windowHeight = clipboardWindowHeight(palette);
         final int maxHeight = Math.max(dp(120), windowHeight - dp(92));
         final int height = Math.min(panel.getMeasuredHeight(), maxHeight);
         final ScrollView scroller = new ScrollView(this);
@@ -1567,6 +1586,12 @@ public class PimeImeService extends InputMethodService
 
     private void dismissLayoutMenu() {
         clipboardOpen = false;
+        clipboardSearching = false;
+        clipboardSearchQuery = "";
+        clipboardPanel = null;
+        hideClipboardSearchHost();
+        /* Handwriting mode owned the key area while searching; put it back. */
+        updateCandidateRow();
         if (layoutOverlay == null
                 || layoutOverlay.getVisibility() != View.VISIBLE) return;
         layoutOverlay.setVisibility(View.GONE);
@@ -2305,6 +2330,12 @@ public class PimeImeService extends InputMethodService
         composition = "";
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
+        if (clipboardSearching) {
+            if (clipboardPanel != null && !raw.isEmpty()) {
+                clipboardPanel.appendSearchText(raw);
+            }
+            return;
+        }
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null && !raw.isEmpty()) {
             ic.setComposingText("", 1);
@@ -2324,15 +2355,19 @@ public class PimeImeService extends InputMethodService
                 || layoutOverlayHost == null || clipboardHistory == null) return;
         dismissCandidateMenu();
         clipboardOpen = true;
+        clipboardSearching = false;
+        clipboardSearchQuery = "";
+        hideClipboardSearchHost();
+        /* Handwriting mode may have given its key area back for the field. */
+        updateCandidateRow();
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
         final ClipboardPanel panel = new ClipboardPanel(this, palette,
                 clipboardPanelListener(),
                 clipboardHistory.quickSendItems(), clipboardHistory.history(),
-                clipboardPanelTab);
-        final int windowHeight = inputWindowRoot.getHeight() > 0
-                ? inputWindowRoot.getHeight()
-                : toolbarHeight() + keyboardHeight(palette);
+                clipboardPanelTab, false, "");
+        clipboardPanel = panel;
+        final int windowHeight = clipboardWindowHeight(palette);
         final int height = Math.max(dp(160), windowHeight - dp(56));
         layoutOverlayHost.removeAllViews();
         layoutOverlayHost.addView(panel, new FrameLayout.LayoutParams(
@@ -2342,6 +2377,71 @@ public class PimeImeService extends InputMethodService
         overlayParams.height = windowHeight;
         layoutOverlay.setLayoutParams(overlayParams);
         layoutOverlay.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * The magnifier replaced the sheet: a search panel grows the input view
+     * above the toolbar, so the keyboard stays visible and usable below it and
+     * the service can route its keys into the query.
+     */
+    private void showClipboardSearch() {
+        if (inputWindowRoot == null || clipboardSearchHost == null
+                || clipboardHistory == null) return;
+        dismissCandidateMenu();
+        clipboardOpen = true;
+        clipboardSearching = true;
+        /* The sheet covered the keys; dropping it lets the query be typed. */
+        if (layoutOverlay != null) {
+            layoutOverlay.setVisibility(View.GONE);
+            if (layoutOverlayHost != null) layoutOverlayHost.removeAllViews();
+        }
+        /* The keys are the input device for the field, even if the handwriting
+         * layout had taken the key area. */
+        updateCandidateRow();
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        final ClipboardPanel panel = new ClipboardPanel(this, palette,
+                clipboardPanelListener(),
+                clipboardHistory.quickSendItems(), clipboardHistory.history(),
+                clipboardPanelTab, true, clipboardSearchQuery);
+        clipboardPanel = panel;
+        /* As tall as the results need, capped by the room above the keyboard
+         * so the editor never scrolls away entirely. */
+        final int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        final int room = screenHeight - clipboardWindowHeight(palette) - dp(24);
+        final int height = Math.max(dp(160), Math.min(dp(320), room));
+        final ViewGroup.LayoutParams params = clipboardSearchHost.getLayoutParams();
+        params.height = height;
+        clipboardSearchHost.setLayoutParams(params);
+        clipboardSearchHost.setVisibility(View.VISIBLE);
+        clipboardSearchHost.removeAllViews();
+        clipboardSearchHost.addView(panel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        inputWindowRoot.requestLayout();
+    }
+
+    /**
+     * The window height without the search panel's growth: the measured frame
+     * still includes it until the next layout pass, so subtract the host.
+     */
+    private int clipboardWindowHeight(KeyboardTheme palette) {
+        final int host = clipboardSearchHost != null ? clipboardSearchHost.getHeight() : 0;
+        final int measured = inputWindowRoot != null ? inputWindowRoot.getHeight() : 0;
+        final int base = measured - host;
+        return base > 0 ? base : toolbarHeight() + keyboardHeight(palette);
+    }
+
+    /** Collapses and empties the search panel's band above the toolbar. */
+    private void hideClipboardSearchHost() {
+        if (clipboardSearchHost == null) return;
+        clipboardSearchHost.removeAllViews();
+        final ViewGroup.LayoutParams params = clipboardSearchHost.getLayoutParams();
+        if (params != null && params.height != 0) {
+            params.height = 0;
+            clipboardSearchHost.setLayoutParams(params);
+        }
+        clipboardSearchHost.setVisibility(View.GONE);
+        if (inputWindowRoot != null) inputWindowRoot.requestLayout();
     }
 
     private ClipboardPanel.Listener clipboardPanelListener() {
@@ -2376,12 +2476,38 @@ public class PimeImeService extends InputMethodService
                 for (ClipboardEntry entry : entries) ids.add(entry.id);
                 clipboardHistory.remove(ids);
             }
+            @Override public void onSearchOpen() {
+                /* A preedit already in the editor belongs to what the user
+                 * typed there; land it before the field takes the keys. */
+                finishCompositionAsRaw();
+                clipboardSearchQuery = "";
+                showClipboardSearch();
+            }
+            @Override public void onSearchClose() {
+                /* The query's preedit never reached the editor; drop it with
+                 * the field instead of leaving a stale composition behind. */
+                if (!composition.isEmpty()) {
+                    if (coreReady) {
+                        report(core.reset(), "reset");
+                        core.pump();
+                    }
+                    composition = "";
+                    if (compositionView != null) compositionView.setText("");
+                    hideCandidates();
+                }
+                showClipboardPanel();
+            }
+            @Override public void onSearchQueryChanged(String query) {
+                clipboardSearchQuery = query == null ? "" : query;
+            }
         };
     }
 
     /** The history changed on disk: redraw the sheet when it is on screen. */
     private void onClipboardHistoryChanged() {
-        if (clipboardOpen) showClipboardPanel();
+        if (!clipboardOpen) return;
+        if (clipboardSearching) showClipboardSearch();
+        else showClipboardPanel();
     }
 
     /** Ends a live composition so a commit replaces nothing it should not. */
@@ -2686,6 +2812,12 @@ public class PimeImeService extends InputMethodService
         composition = "";
         if (compositionView != null) compositionView.setText("");
         hideCandidates();
+        if (clipboardSearching) {
+            if (clipboardPanel != null) {
+                clipboardPanel.appendSearchText(word + (text == null ? "" : text));
+            }
+            return true;
+        }
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return true;
         ic.setComposingText("", 1);
@@ -2695,6 +2827,10 @@ public class PimeImeService extends InputMethodService
     }
 
     private void appendSpace() {
+        if (clipboardSearching) {
+            if (clipboardPanel != null) clipboardPanel.appendSearchText(" ");
+            return;
+        }
         final InputConnection ic = getCurrentInputConnection();
         if (ic != null) ic.commitText(" ", 1);
     }
@@ -2711,6 +2847,9 @@ public class PimeImeService extends InputMethodService
      */
     private void refreshSurrounding() {
         if (!coreReady || !core.hasSession() || secureField) return;
+        /* The editor is not what is being typed into; its text would only
+         * produce association candidates for the wrong field. */
+        if (clipboardSearching) return;
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         final CharSequence before = ic.getTextBeforeCursor(SURROUNDING_BEFORE, 0);
@@ -2724,6 +2863,24 @@ public class PimeImeService extends InputMethodService
     }
 
     private void passThrough(KeyboardView.Key key, String text) {
+        /* Search field: keys edit the query, never the editor behind it. */
+        if (clipboardSearching) {
+            if (clipboardPanel == null) return;
+            switch (key.kind) {
+                case KeyboardView.KIND_BACKSPACE:
+                    clipboardPanel.deleteSearchChar();
+                    break;
+                case KeyboardView.KIND_ENTER:
+                    /* Enter has nothing to confirm: the list filters as you type. */
+                    break;
+                default:
+                    if (text != null && !text.isEmpty()) {
+                        clipboardPanel.appendSearchText(text);
+                    }
+                    break;
+            }
+            return;
+        }
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         switch (key.kind) {
@@ -2781,7 +2938,8 @@ public class PimeImeService extends InputMethodService
      * letter per swipe.
      */
     private void noteCompositionDeletion(String before) {
-        if (before.isEmpty() || secureField) return;
+        /* Query preedits are not editor text; undo must never put them back. */
+        if (before.isEmpty() || secureField || clipboardSearching) return;
         final long now = SystemClock.uptimeMillis();
         DeleteRun run = undoRuns.isEmpty() ? null : undoRuns.get(undoRuns.size() - 1);
         if (run != null && run.text.length() == 0
@@ -2799,6 +2957,8 @@ public class PimeImeService extends InputMethodService
     /** ⌫ swiped down: put back the last run of deletes. */
     @Override
     public void onUndo() {
+        /* Nothing behind the search field may be rewritten from the old journal. */
+        if (clipboardSearching) return;
         if (undoRuns.isEmpty()) {
             toast(R.string.undo_nothing);
             return;
@@ -2826,6 +2986,11 @@ public class PimeImeService extends InputMethodService
      */
     @Override
     public void onDeleteAll() {
+        /* The clear swipe empties the query, not the editor. */
+        if (clipboardSearching) {
+            if (clipboardPanel != null) clipboardPanel.clearSearchText();
+            return;
+        }
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         final String preedit = composition;
@@ -2913,10 +3078,14 @@ public class PimeImeService extends InputMethodService
      */
     private void commitPrediction(int index) {
         if (index < 0 || index >= candidates.size()) return;
-        final InputConnection ic = getCurrentInputConnection();
-        if (ic == null) return;
         final String text = candidates.get(index);
         hideCandidates();
+        if (clipboardSearching) {
+            if (clipboardPanel != null) clipboardPanel.appendSearchText(text);
+            return;
+        }
+        final InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
         ic.commitText(text, 1);
         refreshSurrounding();
     }
@@ -3004,6 +3173,9 @@ public class PimeImeService extends InputMethodService
         compositionEnds = ends == null ? new int[0] : ends;
         renderComposition();
         updateCandidateRow();
+        /* While searching, the preedit lives only in the IME's candidate row:
+         * writing it into the editor would leak the query behind the field. */
+        if (clipboardSearching) return;
         final InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         if (text == null || text.isEmpty()) {
@@ -3046,8 +3218,14 @@ public class PimeImeService extends InputMethodService
     @Override
     public void onCommit(String text) {
         commitSeen = true;
-        final InputConnection ic = getCurrentInputConnection();
-        if (ic != null && text != null && !text.isEmpty()) ic.commitText(text, 1);
+        if (clipboardSearching) {
+            if (clipboardPanel != null && text != null && !text.isEmpty()) {
+                clipboardPanel.appendSearchText(text);
+            }
+        } else {
+            final InputConnection ic = getCurrentInputConnection();
+            if (ic != null && text != null && !text.isEmpty()) ic.commitText(text, 1);
+        }
         composition = "";
         /* Text landed at the cursor, so an old delete run no longer sits where
          * undo would put it back. */
@@ -3298,8 +3476,9 @@ public class PimeImeService extends InputMethodService
         if (candidateRow == null) return;
         /* The handwriting layout owns the whole key area: no keys, no table.
          * Its recognition results use the keyboard's candidate row, so the row
-         * and the toolbar swap in the same band exactly as they do in pinyin. */
-        if (handwritingMode) {
+         * and the toolbar swap in the same band exactly as they do in pinyin.
+         * Clipboard search is the exception: it needs the keys to type. */
+        if (handwritingMode && !clipboardSearching) {
             final boolean hasMatches = !handwritingPadMatches.isEmpty();
             if (compositionView != null) {
                 compositionView.setVisibility(View.GONE);
