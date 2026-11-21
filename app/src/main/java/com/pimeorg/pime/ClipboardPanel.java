@@ -3,6 +3,7 @@ package com.pimeorg.pime;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -270,28 +271,24 @@ final class ClipboardPanel extends FrameLayout {
     }
 
     /**
-     * The field starts with the caret and the placeholder follows it, so the
-     * hint never pushes the caret to the right: an empty field reads like a
-     * focused edit control, not like text the user typed.
+     * An empty field reads as a caret with the placeholder after it, so the
+     * hint never looks like text the user typed and the caret sits where
+     * typing would start. The caret slot is always in the string — blinking
+     * only swaps its colour, so the text never reflows under the finger.
      */
     private void renderSearchField() {
         if (searchField == null) return;
         final String hint = getContext().getString(R.string.clipboard_search_hint);
         final boolean empty = query.isEmpty();
-        final String body = empty
-                ? (caretOn ? "|" + hint : hint)
-                : (caretOn ? query + "|" : query);
+        final String body = empty ? "|" + hint : query + "|";
         final SpannableString text = new SpannableString(body);
         if (empty) {
-            final int hintStart = caretOn ? 1 : 0;
-            text.setSpan(new ForegroundColorSpan(palette.hint), hintStart, body.length(),
+            text.setSpan(new ForegroundColorSpan(palette.hint), 1, body.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
-        if (caretOn) {
-            final int caret = empty ? 0 : body.length() - 1;
-            text.setSpan(new ForegroundColorSpan(palette.accent), caret, caret + 1,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
+        final int caret = empty ? 0 : body.length() - 1;
+        text.setSpan(new ForegroundColorSpan(caretOn ? palette.accent : Color.TRANSPARENT),
+                caret, caret + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         searchField.setTextColor(palette.candidateText);
         searchField.setText(text);
     }
