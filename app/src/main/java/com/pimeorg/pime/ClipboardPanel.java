@@ -97,6 +97,9 @@ final class ClipboardPanel extends FrameLayout {
 
         /** The field was tapped: bring the keys back to type. */
         void onSearchFieldTapped();
+
+        /** The result count changed: the host sizes the panel's band to it. */
+        void onSearchHeightChanged(int preferredHeightPx);
     }
 
     private static final int TAB_CLIPBOARD = 0;
@@ -332,6 +335,24 @@ final class ClipboardPanel extends FrameLayout {
                 : tab == TAB_CLIPBOARD
                         ? R.string.clipboard_empty : R.string.clipboard_quick_send_empty);
         emptyView.setVisibility(empty && !noQuery ? View.VISIBLE : View.GONE);
+        if (searching && listener != null) {
+            listener.onSearchHeightChanged(preferredSearchHeight());
+        }
+    }
+
+    /**
+     * The band the search panel wants: its own rows and nothing else, so a
+     * couple of matches do not leave a screenful of empty panel above the
+     * keys. The host clamps this to the room the window has.
+     */
+    int preferredSearchHeight() {
+        final int rows = adapter == null ? 0 : adapter.getItemCount();
+        /* Content padding 4+4 + header 44; each row is 48 + 3+3 margins. */
+        int height = dp(52) + rows * dp(SEARCH_ROW_HEIGHT_DP + 6);
+        /* A query with no hits still needs a band for the message; an empty
+         * query stays blank. */
+        if (rows == 0 && !query.isEmpty()) height += dp(80);
+        return height;
     }
 
     private void fillHeader() {

@@ -2416,27 +2416,36 @@ public class PimeImeService extends InputMethodService
                 clipboardHistory.quickSendItems(), clipboardHistory.history(),
                 clipboardPanelTab, true, clipboardSearchQuery);
         clipboardPanel = panel;
-        final ViewGroup.LayoutParams params = clipboardSearchHost.getLayoutParams();
-        params.height = searchHostHeight(palette, searchKeysCollapsed);
-        clipboardSearchHost.setLayoutParams(params);
         clipboardSearchHost.setVisibility(View.VISIBLE);
         clipboardSearchHost.removeAllViews();
         clipboardSearchHost.addView(panel, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        applySearchHostHeight(panel.preferredSearchHeight());
         inputWindowRoot.requestLayout();
     }
 
     /**
-     * The search panel's band: as tall as the results need while the keys are
-     * up, and most of the window once a swipe has folded them away.
+     * Sizes the search band to the rows it holds, clamped to the room left in
+     * the window: no screenful of empty panel for a couple of matches, while a
+     * folded result list may use most of the window.
      */
-    private int searchHostHeight(KeyboardTheme palette, boolean collapsed) {
+    private void applySearchHostHeight(int preferredHeightPx) {
+        if (!clipboardSearching || clipboardSearchHost == null) return;
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
         final int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        if (collapsed) {
-            return Math.max(dp(200), Math.min(dp(480), screenHeight - dp(24)));
-        }
-        final int room = screenHeight - clipboardWindowHeight(palette) - dp(24);
-        return Math.max(dp(160), Math.min(dp(320), room));
+        final int max = searchKeysCollapsed
+                ? Math.max(dp(52), Math.min(dp(480), screenHeight - dp(24)))
+                : Math.max(dp(52), Math.min(dp(320),
+                        screenHeight - clipboardWindowHeight(palette) - dp(24)));
+        /* The chrome alone (field + padding) is the floor: an empty query shows
+         * the field and nothing else. */
+        final int height = Math.max(dp(52), Math.min(max, preferredHeightPx));
+        final ViewGroup.LayoutParams params = clipboardSearchHost.getLayoutParams();
+        if (params.height == height) return;
+        params.height = height;
+        clipboardSearchHost.setLayoutParams(params);
+        if (inputWindowRoot != null) inputWindowRoot.requestLayout();
     }
 
     /**
@@ -2463,12 +2472,9 @@ public class PimeImeService extends InputMethodService
             if (inputRoot != null) inputRoot.setMinimumHeight(inputMinHeight);
             updateCandidateRow();
         }
-        final KeyboardTheme palette = inputPalette != null
-                ? inputPalette : KeyboardTheme.of(this);
-        final ViewGroup.LayoutParams params = clipboardSearchHost.getLayoutParams();
-        params.height = searchHostHeight(palette, collapsed);
-        clipboardSearchHost.setLayoutParams(params);
-        if (inputWindowRoot != null) inputWindowRoot.requestLayout();
+        /* Both states hug the rows; folding only raises the cap. */
+        applySearchHostHeight(clipboardPanel != null
+                ? clipboardPanel.preferredSearchHeight() : dp(52));
     }
 
     /**
@@ -2556,6 +2562,9 @@ public class PimeImeService extends InputMethodService
             }
             @Override public void onSearchFieldTapped() {
                 setSearchKeysCollapsed(false);
+            }
+            @Override public void onSearchHeightChanged(int preferredHeightPx) {
+                applySearchHostHeight(preferredHeightPx);
             }
         };
     }
