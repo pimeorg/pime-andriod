@@ -192,20 +192,20 @@ final class ClipboardPanel extends FrameLayout {
         grid.setLayoutManager(new GridLayoutManager(context, searching ? 1 : 2));
         grid.setItemAnimator(null);
         grid.setClipToPadding(false);
-        /* A completed swipe over the results folds the keys away: the list
-         * takes the room instead of scrolling under a keyboard. Folding on
-         * release, not mid-drag, keeps the gesture from being cancelled by
-         * the window resize. */
+        /* The first movement over the results folds the keys away, while the
+         * finger is still down: the list takes the room instead of scrolling
+         * under a keyboard. Re-armed when the gesture ends. */
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            private boolean dragging;
+            private boolean foldedThisGesture;
 
             @Override
             public void onScrollStateChanged(RecyclerView view, int state) {
                 if (!searching) return;
-                if (state == RecyclerView.SCROLL_STATE_DRAGGING) {
-                    dragging = true;
-                } else if (state == RecyclerView.SCROLL_STATE_IDLE && dragging) {
-                    dragging = false;
+                if (state == RecyclerView.SCROLL_STATE_IDLE) {
+                    foldedThisGesture = false;
+                } else if (state == RecyclerView.SCROLL_STATE_DRAGGING
+                        && !foldedThisGesture) {
+                    foldedThisGesture = true;
                     if (listener != null) listener.onSearchResultsDragged();
                 }
             }
