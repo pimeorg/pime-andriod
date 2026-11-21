@@ -90,6 +90,12 @@ final class ClipboardPanel extends FrameLayout {
 
         /** The query changed; kept so a rebuild (history edit) restores it. */
         void onSearchQueryChanged(String query);
+
+        /** The result list was dragged: the host folds the keys away. */
+        void onSearchResultsDragged();
+
+        /** The field was tapped: bring the keys back to type. */
+        void onSearchFieldTapped();
     }
 
     private static final int TAB_CLIPBOARD = 0;
@@ -182,6 +188,24 @@ final class ClipboardPanel extends FrameLayout {
         grid.setLayoutManager(new GridLayoutManager(context, searching ? 1 : 2));
         grid.setItemAnimator(null);
         grid.setClipToPadding(false);
+        /* A completed swipe over the results folds the keys away: the list
+         * takes the room instead of scrolling under a keyboard. Folding on
+         * release, not mid-drag, keeps the gesture from being cancelled by
+         * the window resize. */
+        grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            private boolean dragging;
+
+            @Override
+            public void onScrollStateChanged(RecyclerView view, int state) {
+                if (!searching) return;
+                if (state == RecyclerView.SCROLL_STATE_DRAGGING) {
+                    dragging = true;
+                } else if (state == RecyclerView.SCROLL_STATE_IDLE && dragging) {
+                    dragging = false;
+                    if (listener != null) listener.onSearchResultsDragged();
+                }
+            }
+        });
         body.addView(grid, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -245,27 +269,31 @@ final class ClipboardPanel extends FrameLayout {
         if (listener != null) listener.onSearchQueryChanged(query);
     }
 
-    /** Hint while empty, the query otherwise, with the blinking caret appended. */
+    /**
+     * The field starts with the caret and the placeholder follows it, so the
+     * hint never pushes the caret to the right: an empty field reads like a
+     * focused edit control, not like text the user typed.
+     */
     private void renderSearchField() {
         if (searchField == null) return;
+        final String hint = getContext().getString(R.string.clipboard_search_hint);
         final boolean empty = query.isEmpty();
-        final SpannableString text = new SpannableString(empty
-                ? getContext().getString(R.string.clipboard_search_hint) : query);
-        searchField.setTextColor(empty ? palette.hint : palette.candidateText);
-        if (caretOn) {
-            final int start = text.length();
-            final String withCaret = text + "|";
-            final SpannableString spanned = new SpannableString(withCaret);
-            if (!empty) {
-                spanned.setSpan(new ForegroundColorSpan(palette.candidateText), 0, start,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            }
-            spanned.setSpan(new ForegroundColorSpan(palette.accent), start, withCaret.length(),
+        final String body = empty
+                ? (caretOn ? "|" + hint : hint)
+                : (caretOn ? query + "|" : query);
+        final SpannableString text = new SpannableString(body);
+        if (empty) {
+            final int hintStart = caretOn ? 1 : 0;
+            text.setSpan(new ForegroundColorSpan(palette.hint), hintStart, body.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            searchField.setText(spanned);
-        } else {
-            searchField.setText(text);
         }
+        if (caretOn) {
+            final int caret = empty ? 0 : body.length() - 1;
+            text.setSpan(new ForegroundColorSpan(palette.accent), caret, caret + 1,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        searchField.setTextColor(palette.candidateText);
+        searchField.setText(text);
     }
 
     // ------------------------------------------------------------ tabs
@@ -285,12 +313,14 @@ final class ClipboardPanel extends FrameLayout {
     private void refreshGrid() {
         final List<ClipboardEntry> source = tab == TAB_CLIPBOARD ? history : quickSend;
         List<ClipboardEntry> items = source;
-        if (searching && !query.isEmpty()) {
-            final String needle = query.toLowerCase(Locale.ROOT);
+        if (searching) {
             items = new ArrayList<>();
-            for (ClipboardEntry entry : source) {
-                if (entryLabel(entry).toLowerCase(Locale.ROOT).contains(needle)) {
-                    items.add(entry);
+            if (!query.isEmpty()) {
+                final String needle = query.toLowerCase(Locale.ROOT);
+                for (ClipboardEntry entry : source) {
+                    if (entryLabel(entry).toLowerCase(Locale.ROOT).contains(needle)) {
+                        items.add(entry);
+                    }
                 }
             }
         }
@@ -298,11 +328,13 @@ final class ClipboardPanel extends FrameLayout {
         grid.setAdapter(adapter);
         final boolean empty = items.isEmpty();
         grid.setVisibility(empty ? View.GONE : View.VISIBLE);
-        emptyView.setText(searching && !query.isEmpty()
+        /* No keyword yet means an empty result area, not the whole history. */
+        final boolean noQuery = searching && query.isEmpty();
+        emptyView.setText(searching
                 ? R.string.clipboard_search_empty
                 : tab == TAB_CLIPBOARD
                         ? R.string.clipboard_empty : R.string.clipboard_quick_send_empty);
-        emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
+        emptyView.setVisibility(empty && !noQuery ? View.VISIBLE : View.GONE);
     }
 
     private void fillHeader() {
@@ -324,6 +356,11 @@ final class ClipboardPanel extends FrameLayout {
             searchField.setGravity(Gravity.CENTER_VERTICAL);
             pill.addView(searchField, new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+            /* Tapping the field asks for the keys back after a result swipe
+             * folded them away. */
+            pill.setOnClickListener(v -> {
+                if (listener != null) listener.onSearchFieldTapped();
+            });
 
             final LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
                     0, dp(34), 1f);

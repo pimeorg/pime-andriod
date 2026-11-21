@@ -376,6 +376,11 @@ public class PimeImeService extends InputMethodService
     private ClipboardPanel clipboardPanel;
     /** Grows the input view above the toolbar for the search panel. */
     private FrameLayout clipboardSearchHost;
+    /** A result swipe folded the keys away; tapping the field brings them back. */
+    private boolean searchKeysCollapsed;
+    /** The input view's normal minimum height (bar band + keys), restored
+     * whenever the key area is not folded away for search results. */
+    private int inputMinHeight;
 
     /**
      * Two generations live side by side: the Chinese chain chosen in settings
@@ -888,7 +893,8 @@ public class PimeImeService extends InputMethodService
          * not move as the row comes and goes. */
         final int barBand = toolbar.hasTools()
                 ? Math.max(toolbarHeight(), dp(CANDIDATE_ROW_HEIGHT_DP)) : 0;
-        root.setMinimumHeight(barBand + keyboardHeight);
+        inputMinHeight = barBand + keyboardHeight;
+        root.setMinimumHeight(inputMinHeight);
 
         /* The window wraps this frame. Normally it is exactly as tall as the
          * keys; the layout sheet raises its minimum height to the whole screen
@@ -1589,6 +1595,8 @@ public class PimeImeService extends InputMethodService
         clipboardSearching = false;
         clipboardSearchQuery = "";
         clipboardPanel = null;
+        searchKeysCollapsed = false;
+        if (inputRoot != null) inputRoot.setMinimumHeight(inputMinHeight);
         hideClipboardSearchHost();
         /* Handwriting mode owned the key area while searching; put it back. */
         updateCandidateRow();
@@ -2357,6 +2365,8 @@ public class PimeImeService extends InputMethodService
         clipboardOpen = true;
         clipboardSearching = false;
         clipboardSearchQuery = "";
+        searchKeysCollapsed = false;
+        if (inputRoot != null) inputRoot.setMinimumHeight(inputMinHeight);
         hideClipboardSearchHost();
         /* Handwriting mode may have given its key area back for the field. */
         updateCandidateRow();
@@ -2396,8 +2406,9 @@ public class PimeImeService extends InputMethodService
             if (layoutOverlayHost != null) layoutOverlayHost.removeAllViews();
         }
         /* The keys are the input device for the field, even if the handwriting
-         * layout had taken the key area. */
-        updateCandidateRow();
+         * layout had taken the key area. A rebuild while the results are being
+         * browsed keeps the keys folded. */
+        if (!searchKeysCollapsed) updateCandidateRow();
         final KeyboardTheme palette = inputPalette != null
                 ? inputPalette : KeyboardTheme.of(this);
         final ClipboardPanel panel = new ClipboardPanel(this, palette,
@@ -2405,19 +2416,59 @@ public class PimeImeService extends InputMethodService
                 clipboardHistory.quickSendItems(), clipboardHistory.history(),
                 clipboardPanelTab, true, clipboardSearchQuery);
         clipboardPanel = panel;
-        /* As tall as the results need, capped by the room above the keyboard
-         * so the editor never scrolls away entirely. */
-        final int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        final int room = screenHeight - clipboardWindowHeight(palette) - dp(24);
-        final int height = Math.max(dp(160), Math.min(dp(320), room));
         final ViewGroup.LayoutParams params = clipboardSearchHost.getLayoutParams();
-        params.height = height;
+        params.height = searchHostHeight(palette, searchKeysCollapsed);
         clipboardSearchHost.setLayoutParams(params);
         clipboardSearchHost.setVisibility(View.VISIBLE);
         clipboardSearchHost.removeAllViews();
         clipboardSearchHost.addView(panel, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         inputWindowRoot.requestLayout();
+    }
+
+    /**
+     * The search panel's band: as tall as the results need while the keys are
+     * up, and most of the window once a swipe has folded them away.
+     */
+    private int searchHostHeight(KeyboardTheme palette, boolean collapsed) {
+        final int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        if (collapsed) {
+            return Math.max(dp(200), Math.min(dp(480), screenHeight - dp(24)));
+        }
+        final int room = screenHeight - clipboardWindowHeight(palette) - dp(24);
+        return Math.max(dp(160), Math.min(dp(320), room));
+    }
+
+    /**
+     * Folds the key area away so a swipe over the results leaves the list the
+     * whole window, or brings it back when the field is tapped. The IME window
+     * itself stays up: the search panel is the input view, not a second window.
+     */
+    private void setSearchKeysCollapsed(boolean collapsed) {
+        if (!clipboardSearching || searchKeysCollapsed == collapsed) return;
+        searchKeysCollapsed = collapsed;
+        if (collapsed) {
+            if (keyboard != null) keyboard.setVisibility(View.GONE);
+            if (toolbar != null) toolbar.setVisibility(View.GONE);
+            if (keyboardDivider != null) keyboardDivider.setVisibility(View.GONE);
+            if (candidateRow != null) candidateRow.setVisibility(View.GONE);
+            if (candidatePanel != null) candidatePanel.setVisibility(View.GONE);
+            if (handwritingLayoutView != null) {
+                handwritingLayoutView.setVisibility(View.GONE);
+            }
+            /* The window now wraps the search panel alone; the normal minimum
+             * would keep the folded keys' height as empty board. */
+            if (inputRoot != null) inputRoot.setMinimumHeight(0);
+        } else {
+            if (inputRoot != null) inputRoot.setMinimumHeight(inputMinHeight);
+            updateCandidateRow();
+        }
+        final KeyboardTheme palette = inputPalette != null
+                ? inputPalette : KeyboardTheme.of(this);
+        final ViewGroup.LayoutParams params = clipboardSearchHost.getLayoutParams();
+        params.height = searchHostHeight(palette, collapsed);
+        clipboardSearchHost.setLayoutParams(params);
+        if (inputWindowRoot != null) inputWindowRoot.requestLayout();
     }
 
     /**
@@ -2499,6 +2550,12 @@ public class PimeImeService extends InputMethodService
             }
             @Override public void onSearchQueryChanged(String query) {
                 clipboardSearchQuery = query == null ? "" : query;
+            }
+            @Override public void onSearchResultsDragged() {
+                setSearchKeysCollapsed(true);
+            }
+            @Override public void onSearchFieldTapped() {
+                setSearchKeysCollapsed(false);
             }
         };
     }
